@@ -14,7 +14,7 @@ from aiogram import BaseMiddleware, Bot, Dispatcher, Router, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import CommandObject, CommandStart
+from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -130,7 +130,26 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
             ref = ref_id
 
     await db.register_user(user.id, user.first_name, user.username, ref)
+    if await _agreement_required() and not (await db.get_user(user.id) or {}).get('terms_accepted'):
+        return await show_agreement(message)
     await show_start(message)
+
+
+async def _agreement_required() -> bool:
+    return await db.get_setting("require_agreement", "1") == "1"
+
+
+async def show_agreement(target):
+    text = await db.get_setting("agreement_text")
+    kb = await addin.simple_kb("agreement")
+    photo = await db.get_setting("agreement_photo")
+    if isinstance(target, Message):
+        if photo:
+            await target.answer_photo(photo=photo, caption=text, reply_markup=kb)
+        else:
+            await target.answer(text, reply_markup=kb)
+    else:
+        await show(target, text, kb, photo)
 
 
 async def show_start(message: Message):
@@ -143,6 +162,59 @@ async def show_start(message: Message):
         await message.answer_photo(photo=photo, caption=text, reply_markup=kb)
     else:
         await message.answer(text, reply_markup=kb)
+
+
+@router.callback_query(F.data == "agree:accept")
+async def accept_agreement(call: CallbackQuery, state: FSMContext):
+    await db.accept_terms(call.from_user.id)
+    await state.clear()
+    await call.answer("Условия приняты")
+    user = await db.get_user(call.from_user.id)
+    text = await fill("start_text", name=html.escape(call.from_user.first_name or "друг"),
+                      balance=user['balance'] if user else 0)
+    await show(call, text, await addin.main_menu_kb(), await db.get_setting("start_photo"))
+
+
+@router.callback_query(F.data.in_({"doc:terms", "doc:privacy"}))
+async def show_document(call: CallbackQuery):
+    await call.answer()
+    if call.data == "doc:terms":
+        text = await db.get_setting("terms_text")
+        photo = await db.get_setting("terms_photo")
+        kb = await addin.simple_kb("terms")
+    else:
+        text = await db.get_setting("privacy_text")
+        photo = await db.get_setting("privacy_photo")
+        kb = await addin.simple_kb("privacy")
+    await show(call, text, kb, photo)
+
+
+@router.callback_query(F.data == "doc:back")
+async def document_back(call: CallbackQuery):
+    await call.answer()
+    user = await db.get_user(call.from_user.id)
+    if await _agreement_required() and not (user or {}).get('terms_accepted'):
+        return await show_agreement(call)
+    text = await fill("start_text", name=html.escape(call.from_user.first_name or "друг"),
+                      balance=user['balance'] if user else 0)
+    await show(call, text, await addin.main_menu_kb(), await db.get_setting("start_photo"))
+
+
+@router.message(Command("terms"))
+async def cmd_terms(message: Message):
+    await message.answer(await db.get_setting("terms_text"),
+                         reply_markup=await addin.simple_kb("terms"))
+
+
+@router.message(Command("privacy"))
+async def cmd_privacy(message: Message):
+    await message.answer(await db.get_setting("privacy_text"),
+                         reply_markup=await addin.simple_kb("privacy"))
+
+
+@router.message(Command("agreement"))
+async def cmd_agreement(message: Message):
+    await show_agreement(message)
 
 
 @router.callback_query(F.data == "menu:back")
@@ -335,6 +407,11 @@ async def start_payment(bot: Bot, message: Message, user_id: int, amount: int):
         text = f"Сумма должна быть от {money(min_d)}₽ до {money(max_d)}₽."
         return await message.answer(text, reply_markup=await addin.cancel_kb())
 
+    if await _agreement_required():
+        user = await db.get_user(user_id)
+        if not (user or {}).get('terms_accepted'):
+            return await show_agreement(message)
+
     dep_id = await db.create_deposit(user_id, amount, "choose")
     await notify_admins(bot, f"💳 Заявка #{dep_id}: пополнение {amount} ₽\nЮзер: <code>{user_id}</code>")
     text = await fill("choose_text", amount=money(amount), order_id=dep_id)
@@ -402,7 +479,8 @@ async def credit_deposit(bot: Bot, dep_id: int) -> bool:
         await bot.send_message(
             dep['user_id'],
             f"{emo(addin.BALANCE_EMOJI, '💰')} Баланс пополнен на <b>{dep['amount']} ₽</b>\n"
-            f"Текущий баланс: <b>{result['balance']} ₽</b>",
+            f"Текущий баланс: <b>{result['balance']} ₽</b>\n\n"
+            f"Оплачивая, вы принимаете условия: /terms · /privacy",
             reply_markup=await addin.simple_kb("to_profile"),
         )
     except Exception:

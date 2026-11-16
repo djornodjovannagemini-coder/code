@@ -32,7 +32,9 @@ router.callback_query.filter(F.from_user.id.in_(ADMIN_IDS))
 
 SCREENS = {"start": "Старт", "profile": "Профиль", "shop": "Магазин",
            "deposit": "Пополнение", "info": "Информация",
-           "purchases": "Покупки", "promo": "Промокод", "ref": "Рефералка"}
+           "purchases": "Покупки", "promo": "Промокод", "ref": "Рефералка",
+           "terms": "Пользовательское соглашение", "privacy": "Политика конфиденциальности",
+           "agreement": "Экран согласия"}
 
 
 def is_adm(uid):
@@ -836,7 +838,8 @@ async def adm_system(call: CallbackQuery):
             f"👤 Админы: <code>{', '.join(map(str, ADMIN_IDS)) or '—'}</code>\n"
             f"📦 Товаров: <b>{len(products)}</b> · позиций в наличии: <b>{stock}</b>\n"
             f"💳 Оплата: {'CryptoBot' if payments.enabled() else 'вручную (нет токена)'}\n"
-            f"🛠 Тех. работы: <b>{'ВКЛ' if await db.get_setting('tech_work', '0') == '1' else 'ВЫКЛ'}</b>")
+            f"🛠 Тех. работы: <b>{'ВКЛ' if await db.get_setting('tech_work', '0') == '1' else 'ВЫКЛ'}</b>\n"
+            f"📄 Приняли условия: <b>{await db.count_accepted()}</b>")
     await call.message.edit_text(text, reply_markup=await addin.admin_back_kb())
 
 
@@ -857,6 +860,9 @@ BUTTON_SCREENS = [
     ("to_deposit", "Кнопка «Пополнить»"),
     ("to_profile", "Кнопка «Назад в профиль»"),
     ("back_shop", "Кнопка «Назад в магазин»"),
+    ("agreement", "Экран согласия"),
+    ("terms", "Пользовательское соглашение"),
+    ("privacy", "Политика конфиденциальности"),
     ("choose_payment", "Выбор способа оплаты"),
     ("crypto_pay", "Оплата криптой"),
     ("crypto_expired", "Счёт истёк"),
