@@ -11,6 +11,10 @@ REF_EMOJI = "5429256253224299845"
 SHOP_EMOJI = "5348475279960456198"
 BALANCE_EMOJI = "5258204546391351475"
 MONEY_EMOJI = "5769126056262898415"
+DEPOSIT_EMOJI = "5429098361636560179"
+CRYPTO_EMOJI = "5361836987642815474"
+ADMIN_PAY_EMOJI = "5426948678965307932"
+VERIFY_EMOJI = "5427398138702899667"
 
 
 def btn(text: str, callback_data: str = None, url: str = None, style: str = "primary",
@@ -90,12 +94,28 @@ def cancel_kb(callback_data: str = "profile:deposit") -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def topup_kb(url: str, deposit_id: int) -> InlineKeyboardMarkup:
+def choose_payment_kb(dep_id: int, support_url: str) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(
+        btn("CryptoBot", callback_data=f"dep:pay:{dep_id}", style="primary", emoji=CRYPTO_EMOJI),
+        btn("Через админа", url=support_url, style="primary", emoji=ADMIN_PAY_EMOJI),
+    )
+    return kb.as_markup()
+
+
+def crypto_pay_kb(url: str, dep_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     if url:
-        kb.row(btn("Оплатить", url=url, style="success", emoji=MONEY_EMOJI))
-    kb.row(btn("Проверить оплату", f"dep:check:{deposit_id}", style="primary"))
-    kb.row(back_btn("menu:profile"))
+        kb.row(btn("Оплатить", url=url, style="success", emoji=DEPOSIT_EMOJI))
+    kb.row(btn("Проверить оплату", f"dep:check:{dep_id}", style="primary", emoji=VERIFY_EMOJI))
+    kb.row(back_btn(f"dep:back:{dep_id}"))
+    return kb.as_markup()
+
+
+def crypto_expired_kb(dep_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(btn("Создать новый счёт", f"dep:pay:{dep_id}", style="success", emoji=DEPOSIT_EMOJI))
+    kb.row(back_btn(f"dep:back:{dep_id}"))
     return kb.as_markup()
 
 

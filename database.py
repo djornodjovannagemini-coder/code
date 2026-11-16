@@ -74,8 +74,9 @@ async def init_db():
             CREATE TABLE IF NOT EXISTS deposits (
                 id SERIAL PRIMARY KEY, user_id BIGINT, amount BIGINT, method TEXT DEFAULT 'crypto',
                 status TEXT DEFAULT 'pending', invoice_id TEXT, created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                paid_at TIMESTAMP
+                paid_at TIMESTAMP, expires_at TIMESTAMP
             );
+            ALTER TABLE deposits ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP;
             CREATE INDEX IF NOT EXISTS deposits_status_idx ON deposits (status);
             CREATE INDEX IF NOT EXISTS product_items_sold_idx ON product_items (product_id, is_sold);
         """)
@@ -97,7 +98,12 @@ async def init_db():
             ("purchases_text", "Claude AI Store\n<tg-emoji emoji-id=\"5429412504134525920\">🛒</tg-emoji> Мои покупки\n<b>━━━━━━━━━━━━━</b>"),
             ("promo_text", "Claude AI Store\n<tg-emoji emoji-id=\"5427375590124598857\">🎟</tg-emoji> Промокод\n<b>━━━━━━━━━━━━━</b>\n\nОтправьте промокод сообщением, чтобы активировать скидку."),
             ("ref_text", "Claude AI Store\n<tg-emoji emoji-id=\"5429256253224299845\">🔗</tg-emoji> Реферальная программа\n<b>━━━━━━━━━━━━━</b>\n\nПриглашайте друзей и получайте <b>{percent}%</b> с каждого их пополнения.\n\n<tg-emoji emoji-id=\"5429519697928301269\">👤</tg-emoji> Приглашено: <b>{refs}</b>\n<tg-emoji emoji-id=\"5769126056262898415\">💰</tg-emoji> Заработано: <b>{earned} ₽</b>\n\nВаша ссылка:\n<code>{link}</code>"),
-            ("topup_text", "Claude AI Store\n<tg-emoji emoji-id=\"5429098361636560179\">💰</tg-emoji> Оплата\n<b>━━━━━━━━━━━━━</b>\n\nК оплате: <b>{amount} ₽</b>\n\nНажмите кнопку ниже, оплатите счёт и вернитесь — баланс зачислится автоматически."),
+            ("choose_text", "Claude AI Store\n<tg-emoji emoji-id=\"5429098361636560179\">💰</tg-emoji> Пополнение баланса\n<b>━━━━━━━━━━━━━</b>\n\nСумма: <b>{amount}₽</b>\nID Заказа: <b>{order_id}</b>\n\nВыберите способ оплаты. Баланс зачислится автоматически."),
+            ("crypto_text", "Claude AI Store\n<tg-emoji emoji-id=\"5426938074691056759\">💳</tg-emoji> Оплата криптой\n<b>━━━━━━━━━━━━━</b>\n\nПополнение: <b>{amount}₽</b>\nКомиссия CryptoBot {fee}%: +{fee_amount}₽\nК оплате: <b>{total}₽</b> (~${usd})\n\n<tg-emoji emoji-id=\"5426976819591032000\">⏳</tg-emoji> Ссылка действительна {minutes} минут.\n\n1. Нажмите «Оплатить» и переведите в USDT.\n2. Затем нажмите «Проверить оплату»."),
+            ("crypto_expired_text", "Claude AI Store\n<tg-emoji emoji-id=\"5426938074691056759\">💳</tg-emoji> Оплата криптой\n<b>━━━━━━━━━━━━━</b>\n\nСрок действия счёта истёк.\nСоздайте новый счёт, чтобы оплатить."),
+            ("support_url", "https://t.me/cxepy"),
+            ("crypto_fee", "3"),
+            ("crypto_ttl_minutes", "5"),
             ("tech_work", "0"),
             ("ref_percent", "5"),
             ("deposit_amounts", "100,250,500,1000,2500,5000"),
@@ -332,10 +338,14 @@ async def create_deposit(user_id: int, amount: int, method: str = "crypto", invo
         )
 
 
-async def set_deposit_invoice(deposit_id: int, invoice_id: str):
+async def set_deposit_invoice(deposit_id: int, invoice_id: str, expires_at=None, method: str = None):
     pool = await get_pool()
     async with pool.acquire() as conn:
-        await conn.execute("UPDATE deposits SET invoice_id = $1 WHERE id = $2", invoice_id, deposit_id)
+        await conn.execute(
+            "UPDATE deposits SET invoice_id = $1, expires_at = COALESCE($2, expires_at), "
+            "method = COALESCE($3, method) WHERE id = $4",
+            invoice_id, expires_at, method, deposit_id,
+        )
 
 
 async def get_deposit(deposit_id: int) -> Optional[Dict[str, Any]]:

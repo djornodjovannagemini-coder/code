@@ -3,6 +3,7 @@ import html
 import logging
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 
 from dotenv import load_dotenv
 
@@ -31,7 +32,6 @@ ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().
 
 BOT_USERNAME = ""
 POLL_INTERVAL = 5
-POLL_ATTEMPTS = 240
 
 router = Router()
 
@@ -46,6 +46,9 @@ def emo(emoji_id: str, char: str) -> str:
 
 
 def money(amount) -> str:
+    if isinstance(amount, float) and amount != int(amount):
+        whole, frac = f"{amount:,.2f}".split(".")
+        return f"{whole.replace(',', ' ')},{frac}"
     return f"{int(amount):,}".replace(",", " ")
 
 
@@ -332,23 +335,59 @@ async def start_payment(bot: Bot, message: Message, user_id: int, amount: int):
         text = f"Сумма должна быть от {money(min_d)}₽ до {money(max_d)}₽."
         return await message.answer(text, reply_markup=addin.cancel_kb("profile:deposit"))
 
-    if not payments.enabled():
-        dep_id = await db.create_deposit(user_id, amount, "manual")
-        await notify_admins(bot, f"💳 Заявка #{dep_id}: пополнение {amount} ₽\nЮзер: <code>{user_id}</code>")
-        return await message.answer(
-            f"Заявка #{dep_id} на {amount} ₽ создана.\nСвяжитесь с поддержкой для оплаты — баланс зачислит оператор.",
-            reply_markup=addin.simple_kb("menu:profile"),
-        )
+    dep_id = await db.create_deposit(user_id, amount, "choose")
+    await notify_admins(bot, f"💳 Заявка #{dep_id}: пополнение {amount} ₽\nЮзер: <code>{user_id}</code>")
+    text = await fill("choose_text", amount=money(amount), order_id=dep_id)
+    support = await db.get_setting("support_url", "https://t.me/cxepy")
+    await message.answer(text, reply_markup=addin.choose_payment_kb(dep_id, support))
 
-    dep_id = await db.create_deposit(user_id, amount, "crypto")
-    invoice = await payments.create_invoice(amount, f"dep:{dep_id}")
+
+@router.callback_query(F.data.startswith("dep:pay:"))
+async def pay_crypto(call: CallbackQuery, bot: Bot):
+    dep_id = int(call.data.split(":")[2])
+    dep = await db.get_deposit(dep_id)
+    if not dep or dep['user_id'] != call.from_user.id:
+        return await deny(call, "Заказ не найден")
+    if dep['status'] == 'paid':
+        return await deny(call, "Заказ уже оплачен")
+    if not payments.enabled():
+        return await deny(call, "Оплата криптой временно недоступна, выберите оплату через админа.")
+
+    fee_percent = float(await db.get_setting("crypto_fee", "3") or 0)
+    minutes = int(await db.get_setting("crypto_ttl_minutes", "5") or 5)
+    amount = dep['amount']
+    fee_amount = round(amount * fee_percent / 100, 2)
+    total = round(amount + fee_amount, 2)
+
+    invoice = await payments.create_invoice(total, f"dep:{dep_id}", expires_in=minutes * 60)
     if not invoice:
-        return await message.answer("Не удалось создать счёт, попробуйте позже.",
-                                    reply_markup=addin.simple_kb("profile:deposit"))
-    await db.set_deposit_invoice(dep_id, invoice["id"])
-    text = await fill("topup_text", amount=amount)
-    await message.answer(text, reply_markup=addin.topup_kb(invoice["url"], dep_id))
-    asyncio.create_task(watch_deposit(bot, dep_id, invoice["id"], user_id, amount))
+        return await deny(call, "Не удалось создать счёт, попробуйте позже")
+
+    expires_at = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=minutes)
+    await db.set_deposit_invoice(dep_id, invoice['id'], expires_at, "crypto")
+
+    usd = f"{invoice['usdt']:.2f}" if invoice.get('usdt') else "—"
+    text = await fill(
+        "crypto_text", amount=money(amount), fee=f"{fee_percent:g}",
+        fee_amount=money(fee_amount), total=money(total), usd=usd, minutes=minutes,
+    )
+    await call.answer()
+    await show(call, text, addin.crypto_pay_kb(invoice['url'], dep_id))
+    asyncio.create_task(
+        watch_deposit(bot, dep_id, invoice['id'], minutes, call.message.chat.id, call.message.message_id)
+    )
+
+
+@router.callback_query(F.data.startswith("dep:back:"))
+async def back_to_choose(call: CallbackQuery):
+    dep_id = int(call.data.split(":")[2])
+    dep = await db.get_deposit(dep_id)
+    if not dep or dep['user_id'] != call.from_user.id or dep['status'] == 'paid':
+        return await deny(call, "Заказ не найден")
+    await call.answer()
+    text = await fill("choose_text", amount=money(dep['amount']), order_id=dep_id)
+    support = await db.get_setting("support_url", "https://t.me/cxepy")
+    await show(call, text, addin.choose_payment_kb(dep_id, support))
 
 
 async def credit_deposit(bot: Bot, dep_id: int) -> bool:
@@ -380,8 +419,8 @@ async def credit_deposit(bot: Bot, dep_id: int) -> bool:
     return True
 
 
-async def watch_deposit(bot: Bot, dep_id: int, invoice_id: str, user_id: int, amount: int):
-    for _ in range(POLL_ATTEMPTS):
+async def watch_deposit(bot: Bot, dep_id: int, invoice_id: str, minutes: int, chat_id: int, message_id: int):
+    for _ in range(max(1, minutes * 60 // POLL_INTERVAL)):
         await asyncio.sleep(POLL_INTERVAL)
         try:
             if await payments.is_paid(invoice_id):
@@ -389,9 +428,21 @@ async def watch_deposit(bot: Bot, dep_id: int, invoice_id: str, user_id: int, am
                 return
         except Exception:
             logger.exception("Ошибка фоновой проверки депозита %s", dep_id)
+
     dep = await db.get_deposit(dep_id)
-    if dep and dep['status'] == 'pending':
-        await db.cancel_deposit(dep_id)
+    if not dep or dep['status'] != 'pending':
+        return
+    await db.cancel_deposit(dep_id)
+    await payments.delete_invoice(invoice_id)
+    text = await db.get_setting("crypto_expired_text")
+    try:
+        await bot.edit_message_text(text, chat_id=chat_id, message_id=message_id,
+                                    reply_markup=addin.crypto_expired_kb(dep_id))
+    except Exception:
+        try:
+            await bot.send_message(chat_id, text, reply_markup=addin.crypto_expired_kb(dep_id))
+        except Exception:
+            logger.warning("Не удалось сообщить об истечении счёта %s", dep_id)
 
 
 @router.callback_query(F.data.startswith("dep:check:"))
@@ -402,10 +453,26 @@ async def check_deposit(call: CallbackQuery, bot: Bot):
         return await deny(call, "Счёт не найден")
     if dep['status'] == 'paid':
         return await deny(call, "Этот счёт уже зачислен")
-    if not dep['invoice_id'] or not await payments.is_paid(dep['invoice_id']):
-        return await deny(call, "Оплата не найдена. Если вы только что заплатили — подождите минуту.")
-    await call.answer("Оплачено")
-    await credit_deposit(bot, dep_id)
+    if not dep['invoice_id']:
+        return await deny(call, "Оплата не найдена")
+
+    if await payments.is_paid(dep['invoice_id']):
+        await call.answer("Оплачено")
+        await credit_deposit(bot, dep_id)
+        user = await db.get_user(call.from_user.id)
+        text = (f"{emo(addin.BALANCE_EMOJI, '💰')} Баланс пополнен на <b>{money(dep['amount'])} ₽</b>\n"
+                f"Текущий баланс: <b>{money(user['balance'] if user else dep['amount'])} ₽</b>")
+        return await show(call, text, addin.simple_kb("menu:profile"))
+
+    expired = dep['status'] == 'canceled' or (
+        dep.get('expires_at') and dep['expires_at'] < datetime.now(timezone.utc).replace(tzinfo=None)
+    )
+    if expired:
+        await call.answer()
+        text = await db.get_setting("crypto_expired_text")
+        return await show(call, text, addin.crypto_expired_kb(dep_id))
+
+    await deny(call, "Оплата не найдена. Если вы только что заплатили — подождите минуту.")
 
 
 @router.callback_query(F.data == "profile:promo")
