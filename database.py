@@ -296,6 +296,7 @@ async def init_db():
             ('adm_settings', 'adm_settings:tech', 'Тех. работы', 'adm:settings:tech', None, 'success', None, 1, 1),
             ('adm_settings', 'adm_settings:amounts', 'Изменить суммы пополнения', 'adm:settings:amounts', None, 'primary', None, 2, 1),
             ('adm_settings', 'adm_settings:ref', 'Изменить реф. процент', 'adm:settings:ref', None, 'primary', None, 3, 1),
+            ('adm_settings', 'adm_settings:agree', 'Согласие при старте', 'adm:settings:agree', None, 'primary', None, 4, 1),
             ('adm_settings', 'adm_settings:back', 'Назад', 'adm:menu', None, 'danger', '5888484185261216745', 9, 1),
             ('adm_promos', 'adm_promos:add', '➕ Создать', 'adm:promos:add', None, 'success', None, 1, 1),
             ('adm_promos', 'adm_promos:back', 'Назад', 'adm:menu', None, 'danger', '5888484185261216745', 9, 1),

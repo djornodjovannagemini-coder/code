@@ -169,14 +169,18 @@ async def admin_design_kb() -> InlineKeyboardMarkup:
     return await kb("adm_design")
 
 
-async def admin_settings_kb(tech_work: str, pay_enabled: bool) -> InlineKeyboardMarkup:
+async def admin_settings_kb(tech_work: str, pay_enabled: bool, agreement: str = "1") -> InlineKeyboardMarkup:
     kb_obj = await kb("adm_settings")
     status = "🟢 ВЫКЛ" if tech_work == "0" else "🔴 ВКЛ"
+    agree_status = "🟢 ВКЛ" if agreement == "1" else "🔴 ВЫКЛ"
     for row in kb_obj.inline_keyboard:
         for b in row:
             if b.callback_data == "adm:settings:tech":
                 b.text = f"Тех. работы: {status}"
                 b.style = "danger" if tech_work == "1" else "success"
+            elif b.callback_data == "adm:settings:agree":
+                b.text = f"Согласие при старте: {agree_status}"
+                b.style = "success" if agreement == "1" else "danger"
     return kb_obj
 
 

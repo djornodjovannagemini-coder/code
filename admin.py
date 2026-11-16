@@ -670,12 +670,14 @@ async def settings_text():
     min_d = await db.get_setting("min_deposit", "50")
     max_d = await db.get_setting("max_deposit", "10000")
     pay = "✅ CryptoBot подключён" if payments.enabled() else "⚠️ токен не задан, оплата вручную"
+    agree = "ВКЛ" if await db.get_setting("require_agreement", "1") == "1" else "ВЫКЛ"
     return (f"⚙️ <b>Настройки</b>\n<b>━━━━━━━━━━━━━</b>\n\n"
             f"🛠 Тех. работы: <b>{'ВКЛ' if tech == '1' else 'ВЫКЛ'}</b>\n"
             f"💰 Суммы пополнения: <b>{amounts}</b>\n"
             f"📉 Лимиты: <b>{min_d}–{max_d} ₽</b>\n"
             f"🔗 Реф. процент: <b>{ref}%</b>\n"
-            f"💳 Оплата: {pay}")
+            f"💳 Оплата: {pay}\n"
+            f"📄 Согласие при старте: <b>{agree}</b>")
 
 
 @router.callback_query(F.data == "adm:settings")
@@ -684,7 +686,7 @@ async def adm_settings(call: CallbackQuery, state: FSMContext):
     await state.clear()
     tech = await db.get_setting("tech_work", "0")
     await call.message.edit_text(await settings_text(),
-                                 reply_markup=await addin.admin_settings_kb(tech, payments.enabled()))
+                                 reply_markup=await addin.admin_settings_kb(tech, payments.enabled(), await db.get_setting("require_agreement", "1")))
 
 
 @router.callback_query(F.data == "adm:settings:tech")
@@ -694,7 +696,18 @@ async def toggle_tech(call: CallbackQuery):
     await db.set_setting("tech_work", new_tech)
     await call.answer("Тех. работы " + ("включены" if new_tech == "1" else "выключены"))
     await call.message.edit_text(await settings_text(),
-                                 reply_markup=await addin.admin_settings_kb(new_tech, payments.enabled()))
+                                 reply_markup=await addin.admin_settings_kb(new_tech, payments.enabled(), await db.get_setting("require_agreement", "1")))
+
+
+@router.callback_query(F.data == "adm:settings:agree")
+async def toggle_agreement(call: CallbackQuery):
+    current = await db.get_setting("require_agreement", "1")
+    new_value = "0" if current == "1" else "1"
+    await db.set_setting("require_agreement", new_value)
+    await call.answer("Согласие " + ("включено" if new_value == "1" else "выключено"))
+    tech = await db.get_setting("tech_work", "0")
+    await call.message.edit_text(await settings_text(),
+                                 reply_markup=await addin.admin_settings_kb(tech, payments.enabled(), await db.get_setting("require_agreement", "1")))
 
 
 @router.callback_query(F.data == "adm:settings:amounts")
