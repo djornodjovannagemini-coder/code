@@ -6,7 +6,6 @@ async def build_keyboard_from_db(screen: str, back_screen: str = None) -> Inline
     buttons_data = await db.get_buttons(screen)
     kb = InlineKeyboardBuilder()
     
-    # Группируем по строкам
     rows = {}
     for btn in buttons_data:
         r = btn['row_num']
@@ -26,13 +25,12 @@ async def build_keyboard_from_db(screen: str, back_screen: str = None) -> Inline
             row_buttons.append(btn_obj)
         kb.row(*row_buttons)
         
-    # Если нужна кнопка "Назад"
+    # ИСПРАВЛЕНО: Убран обычный эмодзи ⬅️
     if back_screen:
-        kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data=back_screen, style="danger", icon_custom_emoji_id="5888484185261216745"))
+        kb.row(InlineKeyboardButton(text="Назад", callback_data=back_screen, style="danger", icon_custom_emoji_id="5888484185261216745"))
         
     return kb.as_markup()
 
-# Юзерские клавиатуры (теперь они будут асинхронными)
 async def main_menu_kb() -> InlineKeyboardMarkup:
     return await build_keyboard_from_db("main")
 
@@ -42,7 +40,6 @@ async def profile_kb() -> InlineKeyboardMarkup:
 async def shop_menu_kb() -> InlineKeyboardMarkup:
     return await build_keyboard_from_db("shop", back_screen="menu:back")
 
-# Админские клавиатуры (можно оставить статическими, так как они для тебя)
 def admin_main_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="📦 Товары", callback_data="adm:prod", style="primary")
@@ -55,13 +52,15 @@ def admin_main_kb() -> InlineKeyboardMarkup:
     kb.button(text="📊 Статистика", callback_data="adm:stats", style="primary")
     kb.button(text="💳 Финансы", callback_data="adm:finance", style="primary")
     kb.button(text="🛡 Система", callback_data="adm:system", style="danger")
-    kb.button(text="⬅️ Выход", callback_data="menu:back", style="danger", icon_custom_emoji_id="5888484185261216745")
+    # ИСПРАВЛЕНО: Убран обычный эмодзи
+    kb.button(text="Выход", callback_data="menu:back", style="danger", icon_custom_emoji_id="5888484185261216745")
     kb.adjust(2, 2, 2, 2, 2, 1)
     return kb.as_markup()
 
 def admin_back_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.button(text="⬅️ Назад", callback_data="adm:menu", style="danger", icon_custom_emoji_id="5888484185261216745")
+    # ИСПРАВЛЕНО
+    kb.button(text="Назад", callback_data="adm:menu", style="danger", icon_custom_emoji_id="5888484185261216745")
     return kb.as_markup()
 
 def admin_products_kb() -> InlineKeyboardMarkup:
@@ -69,7 +68,8 @@ def admin_products_kb() -> InlineKeyboardMarkup:
     kb.button(text="➕ Добавить", callback_data="adm:prod:add", style="success")
     kb.button(text="👁 Скрыть/Показать", callback_data="adm:prod:toggle", style="primary")
     kb.button(text="🗑 Удалить", callback_data="adm:prod:del", style="danger")
-    kb.button(text="⬅️ Назад", callback_data="adm:menu", style="danger")
+    # ИСПРАВЛЕНО
+    kb.button(text="Назад", callback_data="adm:menu", style="danger", icon_custom_emoji_id="5888484185261216745")
     kb.adjust(1, 1, 1, 1)
     return kb.as_markup()
 
@@ -77,7 +77,8 @@ def admin_users_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="💰 Изменить баланс", callback_data="adm:users:bal", style="success")
     kb.button(text="⛔️ Забанить / Разбанить", callback_data="adm:users:ban", style="danger")
-    kb.button(text="⬅️ Назад", callback_data="adm:menu", style="danger")
+    # ИСПРАВЛЕНО
+    kb.button(text="Назад", callback_data="adm:menu", style="danger", icon_custom_emoji_id="5888484185261216745")
     kb.adjust(1, 1, 1)
     return kb.as_markup()
 
@@ -86,7 +87,8 @@ def admin_design_kb() -> InlineKeyboardMarkup:
     kb.button(text="🚪 Старт", callback_data="adm:design:start", style="primary")
     kb.button(text="👤 Профиль", callback_data="adm:design:profile", style="primary")
     kb.button(text="🛍 Магазин", callback_data="adm:design:shop", style="primary")
-    kb.button(text="⬅️ Назад", callback_data="adm:menu", style="danger")
+    # ИСПРАВЛЕНО
+    kb.button(text="Назад", callback_data="adm:menu", style="danger", icon_custom_emoji_id="5888484185261216745")
     kb.adjust(3, 1)
     return kb.as_markup()
 
@@ -94,6 +96,7 @@ def admin_settings_kb(tech_work: str) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     status = "🟢 ВЫКЛ" if tech_work == "0" else "🔴 ВКЛ"
     kb.button(text=f"Тех. работы: {status}", callback_data="adm:settings:tech", style="danger" if tech_work == "1" else "success")
-    kb.button(text="⬅️ Назад", callback_data="adm:menu", style="danger")
+    # ИСПРАВЛЕНО
+    kb.button(text="Назад", callback_data="adm:menu", style="danger", icon_custom_emoji_id="5888484185261216745")
     kb.adjust(1, 1)
     return kb.as_markup()
