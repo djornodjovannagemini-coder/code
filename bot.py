@@ -6,7 +6,7 @@ from aiogram import Bot, Dispatcher, Router, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart
-from aiogram.types import Message, CallbackQuery, FSInputFile
+from aiogram.types import Message, CallbackQuery
 from dotenv import load_dotenv
 
 import admin
@@ -18,19 +18,21 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 router = Router()
 
-# ================= ПОЛЬЗОВАТЕЛЬСКАЯ ЧАСТЬ =================
-
 @router.message(CommandStart())
 async def cmd_start(message: Message):
     user_id = message.from_user.id
     await db.register_user(user_id, message.from_user.first_name, message.from_user.username)
     
-    # Получаем настройки экрана из БД (текст, фото, эмодзи)
-    settings = await db.get_screen_settings("start")
+    # Получаем данные юзера для баланса
+    user = await db.get_user(user_id)
+    balance = user['balance'] if user else 0
     
+    settings = await db.get_screen_settings("start")
     text = settings.get("text", "Привет! Добро пожаловать.")
-    # Подставляем имя
+    
+    # Заменяем плейсхолдеры
     text = text.replace("{name}", message.from_user.first_name or "друг")
+    text = text.replace("{balance}", str(balance))
     
     photo = settings.get("photo_id")
     kb = addin.main_menu_kb(settings)
@@ -49,17 +51,19 @@ async def show_profile(call: CallbackQuery):
     settings = await db.get_screen_settings("profile")
     text = settings.get("text", "Профиль")
     
-    # Форматируем текст профиля
-    text = text.format(
-        name=call.from_user.first_name or "друг",
-        balance=user['balance'],
-        spent=user['total_spent'],
-        purchases=user['purchases_count'],
-        refs=user['ref_count'],
-        ref_earned=user['ref_earned'],
-        user_id=user['user_id']
-    )
-    
+    try:
+        text = text.format(
+            name=call.from_user.first_name or "друг",
+            balance=user['balance'],
+            spent=user['total_spent'],
+            purchases=user['purchases_count'],
+            refs=user['ref_count'],
+            ref_earned=user['ref_earned'],
+            user_id=user['user_id']
+        )
+    except KeyError:
+        pass
+        
     photo = settings.get("photo_id")
     kb = addin.profile_kb(settings)
     
@@ -69,7 +73,6 @@ async def show_profile(call: CallbackQuery):
         else:
             await call.message.edit_text(text=text, reply_markup=kb)
     except Exception:
-        # Если меняем с фото на текст или наоборот
         if photo:
             await call.message.answer_photo(photo=photo, caption=text, reply_markup=kb)
         else:
@@ -142,11 +145,9 @@ async def process_buy(call: CallbackQuery):
     product_id = int(call.data.split(":")[1])
     user_id = call.from_user.id
     
-    # Пытаемся купить (атомарная операция в БД)
     result = await db.buy_product(user_id, product_id)
     
     if result["success"]:
-        # Успешная покупка
         key = result["key"]
         balance = result["balance"]
         
@@ -160,10 +161,8 @@ async def process_buy(call: CallbackQuery):
         await call.message.answer(text)
         await call.answer("Ключ выдан!")
         
-        # Уведомление админу
         await addin.notify_admin_purchase(call.bot, user_id, product_id, key)
     else:
-        # Ошибка (нет денег или нет в наличии)
         await call.answer(result["error"], show_alert=True)
 
 @router.callback_query(F.data == "profile:deposit")
@@ -183,8 +182,7 @@ async def show_deposit(call: CallbackQuery):
 
 @router.callback_query(F.data == "deposit:crypto")
 async def deposit_crypto(call: CallbackQuery):
-    # Здесь будет вызов из addin.py
-    url = await addin.create_crypto_invoice(call.from_user.id, 500) # Пример: счет на 500р
+    url = await addin.create_crypto_invoice(call.from_user.id, 500)
     if url:
         text = "💳 Счет создан! Оплатите по кнопке ниже."
         kb = addin.crypto_pay_kb(url)
@@ -208,8 +206,15 @@ async def deposit_admin(call: CallbackQuery):
 
 @router.callback_query(F.data == "menu:back")
 async def back_to_main(call: CallbackQuery):
+    user = await db.get_user(call.from_user.id)
+    balance = user['balance'] if user else 0
+
     settings = await db.get_screen_settings("start")
-    text = settings.get("text", "Привет!").replace("{name}", call.from_user.first_name or "друг")
+    text = settings.get("text", "Привет!")
+    
+    text = text.replace("{name}", call.from_user.first_name or "друг")
+    text = text.replace("{balance}", str(balance))
+    
     photo = settings.get("photo_id")
     kb = addin.main_menu_kb(settings)
     
@@ -225,22 +230,13 @@ async def back_to_main(call: CallbackQuery):
             await call.message.answer(text=text, reply_markup=kb)
     await call.answer()
 
-
-# ================= ЗАПУСК =================
-
 async def main():
     logging.basicConfig(level=logging.INFO)
-    
-    # Инициализация БД
     await db.init_db()
 
-    bot = Bot(
-        token=BOT_TOKEN,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-    )
+    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher()
 
-    # Подключаем роутеры
     dp.include_router(admin.router)
     dp.include_router(router)
 
