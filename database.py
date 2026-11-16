@@ -1,19 +1,41 @@
 import asyncpg
 import os
+import logging
 from typing import Optional, Dict, Any, List
 
+logger = logging.getLogger(__name__)
+
+# Получаем URL базы данных из переменных окружения Railway
 DATABASE_URL = os.getenv("DATABASE_URL")
+
+if not DATABASE_URL:
+    raise ValueError("❌ КРИТИЧЕСКАЯ ОШИБКА: DATABASE_URL не задан в Variables!")
+
+# Railway иногда выдает postgres:// вместо postgresql://
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+# Для внутренних подключений Railway (postgres.railway.internal) SSL не требуется
+use_ssl = "railway.internal" not in DATABASE_URL
+
 _pool: Optional[asyncpg.Pool] = None
 
 async def get_pool() -> asyncpg.Pool:
     global _pool
     if _pool is None:
-        _pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=10)
+        _pool = await asyncpg.create_pool(
+            DATABASE_URL,
+            min_size=1,
+            max_size=10,
+            ssl="require" if use_ssl else None,
+            timeout=10
+        )
     return _pool
 
 async def init_db():
     pool = await get_pool()
     async with pool.acquire() as conn:
+        # Создание таблиц
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id BIGINT PRIMARY KEY,
@@ -72,25 +94,28 @@ async def init_db():
             );
         """)
         
+        # Базовые настройки экранов
         default_settings = [
             ("start_text", "Claude AI Store\n<tg-emoji emoji-id=\"5193119436621494267\">🏠</tg-emoji> Главное меню\n<b>━━━━━━━━━━━━━</b>\n\n👋 С возвращением, <b>{name}</b>.\n💰 Баланс: <b>{balance} ₽</b>\n\nРазные продукты · API-ключи · Приватные сообщества"),
             ("start_photo", ""),
             ("profile_text", "👤 Профиль\n<b>━━━━━━━━━━━━━</b>\n\n💰 Баланс: <b>{balance} ₽</b>\n🛍 Всего потрачено: <b>{spent} ₽</b>\n🛒 Покупок: <b>{purchases}</b>\n🆔 Ваш ID: <b>{user_id}</b>"),
             ("profile_photo", ""),
+            ("shop_text", "🛍 <b>Магазин</b>\nВыберите раздел:"),
+            ("shop_photo", ""),
             ("tech_work", "0")
         ]
         for k, v in default_settings:
             await conn.execute("INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING", k, v)
         
-        # Дефолтные кнопки для главного меню и профиля (пример)
+        # Дефолтные кнопки для главного меню
         await conn.execute("""
-            INSERT INTO buttons (screen, button_key, text, callback_data, style, emoji_id, row_num, position) 
+            INSERT INTO buttons (screen, button_key, text, callback_data, url, style, emoji_id, row_num, position) 
             VALUES 
-            ('main', 'profile', 'Профиль', 'menu:profile', 'primary', '6032693626394382504', 1, 1),
-            ('main', 'shop', 'Магазин', 'menu:shop', 'primary', '5348475279960456198', 1, 2),
-            ('main', 'info', 'Информация', 'menu:info', 'success', '5348507247402040764', 2, 1),
-            ('main', 'channel', 'Канал', '', 'success', '5260268501515377807', 2, 2),
-            ('main', 'support', 'Поддержка', '', 'danger', '5258513401784573443', 3, 1)
+            ('main', 'profile', 'Профиль', 'menu:profile', NULL, 'primary', '6032693626394382504', 1, 1),
+            ('main', 'shop', 'Магазин', 'menu:shop', NULL, 'primary', '5348475279960456198', 1, 2),
+            ('main', 'info', 'Информация', 'menu:info', NULL, 'success', '5348507247402040764', 2, 1),
+            ('main', 'channel', 'Канал', NULL, 'https://t.me/anthropc_claude', 'success', '5260268501515377807', 2, 2),
+            ('main', 'support', 'Поддержка', NULL, 'https://t.me/cxepy', 'danger', '5258513401784573443', 3, 1)
             ON CONFLICT (button_key) DO NOTHING
         """)
 
@@ -166,6 +191,7 @@ async def buy_product(user_id: int, product_id: int, discount: int = 0) -> Dict[
     pool = await get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
+            # Блокируем строку пользователя, чтобы избежать списания дважды
             user = await conn.fetchrow("SELECT balance FROM users WHERE user_id = $1 FOR UPDATE", user_id)
             if not user: return {"success": False, "error": "Юзер не найден"}
             
@@ -175,6 +201,7 @@ async def buy_product(user_id: int, product_id: int, discount: int = 0) -> Dict[
             final_price = int(prod['price'] * (1 - discount / 100))
             if user['balance'] < final_price: return {"success": False, "error": "Недостаточно средств"}
             
+            # Блокируем ключ, чтобы два человека не купили один и тот же
             item = await conn.fetchrow("SELECT id, content FROM product_items WHERE product_id = $1 AND is_sold = 0 LIMIT 1 FOR UPDATE", product_id)
             if not item: return {"success": False, "error": "Нет в наличии"}
             
@@ -208,4 +235,6 @@ async def update_button(button_key: str, **kwargs):
     pool = await get_pool()
     async with pool.acquire() as conn:
         for key, value in kwargs.items():
-            await conn.execute(f"UPDATE buttons SET {key} = $1 WHERE button_key = $2", value, button_key)
+            # Защита от SQL-инъекций через ключи (только разрешенные колонки)
+            if key in ['text', 'callback_data', 'url', 'style', 'emoji_id', 'row_num', 'position', 'is_active']:
+                await conn.execute(f"UPDATE buttons SET {key} = $1 WHERE button_key = $2", value, button_key)
