@@ -163,28 +163,31 @@ async def admin_design(call: CallbackQuery):
         return
     await call.message.edit_text("🎨 <b>Оформление экранов</b>\nВыберите экран для редактирования:", reply_markup=admin_design_kb())
 
-# Обрати внимание: фильтр "admin:edit" без подчеркивания в конце
 @router.callback_query(F.data.startswith("admin:edit"))
 async def start_edit_screen(call: CallbackQuery, state: FSMContext):
     await call.answer()
     if not is_admin(call.from_user.id): 
         return
     
-    # Безопасное извлечение: удаляем "admin:edit_" или "admin:edit"
     screen = call.data.replace("admin:edit_", "").replace("admin:edit", "")
     
     await state.update_data(screen=screen)
     
+    # ИСПРАВЛЕНО: Экранированы скобки &lt; и &gt; для tg-emoji
     text = (
         f"Редактирование экрана <b>{screen}</b>.\n\n"
-        f"1️⃣ Отправьте новый текст (HTML и <tg-emoji> поддерживаются).\n"
+        f"1️⃣ Отправьте новый текст (HTML и &lt;tg-emoji&gt; поддерживаются).\n"
         f"Если хотите оставить текущий текст, отправьте <code>-</code>."
     )
     
     try:
         await call.message.edit_text(text)
-    except Exception:
-        await call.message.answer(text)
+    except Exception as e:
+        logging.error(f"Error in start_edit_screen: {e}")
+        try:
+            await call.message.answer(text)
+        except Exception as e2:
+            logging.error(f"Error in start_edit_screen fallback: {e2}")
         
     await state.set_state(AdminStates.edit_screen_text)
 
