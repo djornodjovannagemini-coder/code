@@ -1,239 +1,211 @@
-import aiosqlite
+import asyncpg
+import os
 from typing import Optional, Dict, Any, List
 
-DB_PATH = "bot.db"
+DATABASE_URL = os.getenv("DATABASE_URL")
+_pool: Optional[asyncpg.Pool] = None
+
+async def get_pool() -> asyncpg.Pool:
+    global _pool
+    if _pool is None:
+        _pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=10)
+    return _pool
 
 async def init_db():
-    """Создает таблицы и добавляет дефолтные настройки при первом запуске."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        # Таблица пользователей
-        await db.execute("""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
+                user_id BIGINT PRIMARY KEY,
                 first_name TEXT,
                 username TEXT,
-                balance INTEGER DEFAULT 0,
-                total_spent INTEGER DEFAULT 0,
+                balance BIGINT DEFAULT 0,
+                total_spent BIGINT DEFAULT 0,
                 purchases_count INTEGER DEFAULT 0,
-                ref_count INTEGER DEFAULT 0,
-                ref_earned INTEGER DEFAULT 0,
                 is_banned INTEGER DEFAULT 0,
                 reg_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
-        # Таблица настроек экранов (тексты, баннеры)
-        await db.execute("""
+            );
             CREATE TABLE IF NOT EXISTS settings (
-                screen_name TEXT PRIMARY KEY,
-                text TEXT,
-                photo_id TEXT
-            )
-        """)
-        
-        # Таблица товаров
-        await db.execute("""
+                key TEXT PRIMARY KEY,
+                value TEXT
+            );
             CREATE TABLE IF NOT EXISTS products (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 name TEXT,
                 description TEXT,
-                price INTEGER,
+                price BIGINT,
+                item_type TEXT DEFAULT 'text',
                 is_active INTEGER DEFAULT 1
-            )
-        """)
-        
-        # Таблица ключей (склад)
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS product_keys (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                product_id INTEGER,
-                key_text TEXT,
+            );
+            CREATE TABLE IF NOT EXISTS product_items (
+                id SERIAL PRIMARY KEY,
+                product_id INTEGER REFERENCES products(id) ON DELETE CASCADE,
+                content TEXT,
                 is_sold INTEGER DEFAULT 0,
-                sold_to INTEGER,
-                sold_date TIMESTAMP,
-                FOREIGN KEY(product_id) REFERENCES products(id)
-            )
-        """)
-        
-        # Таблица заказов (история)
-        await db.execute("""
+                sold_to BIGINT,
+                sold_date TIMESTAMP
+            );
             CREATE TABLE IF NOT EXISTS orders (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT,
                 product_id INTEGER,
-                key_id INTEGER,
-                price INTEGER,
+                price BIGINT,
                 order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
+            );
+            CREATE TABLE IF NOT EXISTS promocodes (
+                code TEXT PRIMARY KEY,
+                discount INTEGER,
+                uses_left INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS buttons (
+                id SERIAL PRIMARY KEY,
+                screen TEXT,
+                button_key TEXT UNIQUE,
+                text TEXT,
+                callback_data TEXT,
+                url TEXT,
+                style TEXT DEFAULT 'primary',
+                emoji_id TEXT,
+                row_num INTEGER,
+                position INTEGER,
+                is_active INTEGER DEFAULT 1
+            );
         """)
         
-        # Добавляем дефолтные тексты, если их нет
         default_settings = [
-            ("start", "Claude AI Store\n<tg-emoji emoji-id=\"5193119436621494267\">🏠</tg-emoji> Главное меню\n<b>━━━━━━━━━━━━━</b>\n\n<tg-emoji emoji-id=\"5458904472598095631\">👋</tg-emoji> С возвращением, <b>{name}</b>.\n<tg-emoji emoji-id=\"5769126056262898415\">💰</tg-emoji> Баланс: <b>{balance} ₽</b>\n\nРазные продукты · API-ключи · Приватные сообщества", None),
-            ("profile", "Claude AI Store\n<tg-emoji emoji-id=\"5429519697928301269\">👤</tg-emoji> Профиль\n<b>━━━━━━━━━━━━━</b>\n\n<tg-emoji emoji-id=\"5258204546391351475\">💰</tg-emoji> Баланс: <b>{balance} ₽</b>\n<tg-emoji emoji-id=\"5429154960715588692\">🛍️</tg-emoji> Всего потрачено: <b>{spent} ₽</b>\n<tg-emoji emoji-id=\"5429412504134525920\">🛒</tg-emoji> Покупок: <b>{purchases}</b>\n<tg-emoji emoji-id=\"5429256253224299845\">🔗</tg-emoji> Рефералов: <b>{refs} · заработано {ref_earned} ₽</b>\n\n<tg-emoji emoji-id=\"5427321817134051632\">🆔</tg-emoji> Ваш ID: <b>{user_id}</b>", None),
-            ("shop", "Claude AI Store\n<tg-emoji emoji-id=\"5348475279960456198\">🛍</tg-emoji> Магазин\n<b>━━━━━━━━━━━━━</b>\n\nВыберите категорию:", None),
-            ("catalog", "API-ключи\n<b>━━━━━━━━━━━━━</b>\n\nВыберите товар для покупки:", None)
+            ("start_text", "Claude AI Store\n<tg-emoji emoji-id=\"5193119436621494267\">🏠</tg-emoji> Главное меню\n<b>━━━━━━━━━━━━━</b>\n\n👋 С возвращением, <b>{name}</b>.\n💰 Баланс: <b>{balance} ₽</b>\n\nРазные продукты · API-ключи · Приватные сообщества"),
+            ("start_photo", ""),
+            ("profile_text", "👤 Профиль\n<b>━━━━━━━━━━━━━</b>\n\n💰 Баланс: <b>{balance} ₽</b>\n🛍 Всего потрачено: <b>{spent} ₽</b>\n🛒 Покупок: <b>{purchases}</b>\n🆔 Ваш ID: <b>{user_id}</b>"),
+            ("profile_photo", ""),
+            ("tech_work", "0")
         ]
-        for screen, text, photo in default_settings:
-            await db.execute("INSERT OR IGNORE INTO settings (screen_name, text, photo_id) VALUES (?, ?, ?)", (screen, text, photo))
+        for k, v in default_settings:
+            await conn.execute("INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING", k, v)
         
-        await db.commit()
+        # Дефолтные кнопки для главного меню и профиля (пример)
+        await conn.execute("""
+            INSERT INTO buttons (screen, button_key, text, callback_data, style, emoji_id, row_num, position) 
+            VALUES 
+            ('main', 'profile', 'Профиль', 'menu:profile', 'primary', '6032693626394382504', 1, 1),
+            ('main', 'shop', 'Магазин', 'menu:shop', 'primary', '5348475279960456198', 1, 2),
+            ('main', 'info', 'Информация', 'menu:info', 'success', '5348507247402040764', 2, 1),
+            ('main', 'channel', 'Канал', '', 'success', '5260268501515377807', 2, 2),
+            ('main', 'support', 'Поддержка', '', 'danger', '5258513401784573443', 3, 1)
+            ON CONFLICT (button_key) DO NOTHING
+        """)
+
+async def get_setting(key: str, default: str = "") -> str:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT value FROM settings WHERE key = $1", key)
+        return row['value'] if row else default
+
+async def set_setting(key: str, value: str):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", key, value)
 
 async def register_user(user_id: int, first_name: str, username: Optional[str]):
-    """Регистрация или обновление данных пользователя."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-            INSERT INTO users (user_id, first_name, username) 
-            VALUES (?, ?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET 
-            first_name=excluded.first_name, 
-            username=excluded.username
-        """, (user_id, first_name, username))
-        await db.commit()
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO users (user_id, first_name, username) VALUES ($1, $2, $3)
+            ON CONFLICT (user_id) DO UPDATE SET first_name = EXCLUDED.first_name, username = EXCLUDED.username
+        """, user_id, first_name, username)
 
 async def get_user(user_id: int) -> Optional[Dict[str, Any]]:
-    """Получить данные пользователя."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)) as cursor:
-            row = await cursor.fetchone()
-            return dict(row) if row else None
-
-async def get_screen_settings(screen_name: str) -> Dict[str, Any]:
-    """Получить текст и фото для экрана."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT text, photo_id FROM settings WHERE screen_name = ?", (screen_name,)) as cursor:
-            row = await cursor.fetchone()
-            return dict(row) if row else {}
-
-async def update_screen_setting(screen_name: str, text: Optional[str] = None, photo_id: Optional[str] = None):
-    """Обновить настройки экрана (используется в админке)."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        if text is not None:
-            await db.execute("UPDATE settings SET text = ? WHERE screen_name = ?", (text, screen_name))
-        if photo_id is not None:
-            # Если передали "0" или "none", значит нужно удалить фото
-            if photo_id in ["0", "none"]:
-                photo_id = None
-            await db.execute("UPDATE settings SET photo_id = ? WHERE screen_name = ?", (photo_id, screen_name))
-        await db.commit()
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM users WHERE user_id = $1", user_id)
+        return dict(row) if row else None
 
 async def get_active_products() -> List[Dict[str, Any]]:
-    """Получить список всех активных товаров."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT * FROM products WHERE is_active = 1") as cursor:
-            rows = await cursor.fetchall()
-            return [dict(row) for row in rows]
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT * FROM products WHERE is_active = 1")
+        return [dict(r) for r in rows]
 
 async def get_product(product_id: int) -> Optional[Dict[str, Any]]:
-    """Получить данные товара по ID."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT * FROM products WHERE id = ?", (product_id,)) as cursor:
-            row = await cursor.fetchone()
-            return dict(row) if row else None
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM products WHERE id = $1", product_id)
+        return dict(row) if row else None
 
 async def get_product_stock(product_id: int) -> int:
-    """Узнать, сколько ключей осталось в наличии."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT COUNT(*) FROM product_keys WHERE product_id = ? AND is_sold = 0", (product_id,)) as cursor:
-            row = await cursor.fetchone()
-            return row[0] if row else 0
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT COUNT(*) as cnt FROM product_items WHERE product_id = $1 AND is_sold = 0", product_id)
+        return row['cnt'] if row else 0
 
-async def buy_product(user_id: int, product_id: int) -> Dict[str, Any]:
-    """
-    Атомарная покупка товара. 
-    Проверяет баланс, наличие ключа, списывает деньги и выдает ключ.
-    """
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        
-        # Начинаем транзакцию
-        await db.execute("BEGIN IMMEDIATE")
-        
-        try:
-            # 1. Получаем пользователя
-            async with db.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,)) as cursor:
-                user = await cursor.fetchone()
-            if not user:
-                await db.rollback()
-                return {"success": False, "error": "Пользователь не найден"}
+async def add_product(name: str, desc: str, price: int, item_type: str) -> int:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("INSERT INTO products (name, description, price, item_type) VALUES ($1, $2, $3, $4) RETURNING id", name, desc, price, item_type)
+        return row['id']
 
-            # 2. Получаем товар
-            async with db.execute("SELECT price, is_active FROM products WHERE id = ?", (product_id,)) as cursor:
-                product = await cursor.fetchone()
-            if not product or not product['is_active']:
-                await db.rollback()
-                return {"success": False, "error": "Товар недоступен"}
+async def add_product_items(product_id: int, items: List[str]) -> int:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            for item in items:
+                if item.strip():
+                    await conn.execute("INSERT INTO product_items (product_id, content) VALUES ($1, $2)", product_id, item.strip())
+        return len(items)
 
-            # 3. Проверяем баланс
-            if user['balance'] < product['price']:
-                await db.rollback()
-                return {"success": False, "error": "Недостаточно средств на балансе"}
+async def toggle_product(product_id: int, status: int):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("UPDATE products SET is_active = $1 WHERE id = $2", status, product_id)
 
-            # 4. Ищем свободный ключ
-            async with db.execute("SELECT id, key_text FROM product_keys WHERE product_id = ? AND is_sold = 0 LIMIT 1", (product_id,)) as cursor:
-                key_row = await cursor.fetchone()
+async def delete_product(product_id: int):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM products WHERE id = $1", product_id)
+
+async def buy_product(user_id: int, product_id: int, discount: int = 0) -> Dict[str, Any]:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            user = await conn.fetchrow("SELECT balance FROM users WHERE user_id = $1 FOR UPDATE", user_id)
+            if not user: return {"success": False, "error": "Юзер не найден"}
             
-            if not key_row:
-                await db.rollback()
-                return {"success": False, "error": "Товара нет в наличии"}
-
-            # 5. Списываем баланс и обновляем статистику
-            new_balance = user['balance'] - product['price']
-            await db.execute("""
-                UPDATE users 
-                SET balance = ?, total_spent = total_spent + ?, purchases_count = purchases_count + 1 
-                WHERE user_id = ?
-            """, (new_balance, product['price'], user_id))
-
-            # 6. Помечаем ключ как проданный
-            await db.execute("""
-                UPDATE product_keys 
-                SET is_sold = 1, sold_to = ?, sold_date = CURRENT_TIMESTAMP 
-                WHERE id = ?
-            """, (user_id, key_row['id']))
-
-            # 7. Записываем в историю заказов
-            await db.execute("""
-                INSERT INTO orders (user_id, product_id, key_id, price) 
-                VALUES (?, ?, ?, ?)
-            """, (user_id, product_id, key_row['id'], product['price']))
-
-            await db.commit()
-            return {"success": True, "key": key_row['key_text'], "balance": new_balance}
-
-        except Exception as e:
-            await db.rollback()
-            print(f"DB Error in buy_product: {e}")
-            return {"success": False, "error": "Ошибка базы данных при покупке"}
-
-# ================= ФУНКЦИИ ДЛЯ АДМИНКИ =================
-
-async def add_product(name: str, description: str, price: int) -> int:
-    """Добавляет новый товар и возвращает его ID."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute(
-            "INSERT INTO products (name, description, price) VALUES (?, ?, ?)",
-            (name, description, price)
-        )
-        await db.commit()
-        return cursor.lastrowid
-
-async def add_product_keys(product_id: int, keys_list: List[str]) -> int:
-    """Добавляет ключи к товару. Возвращает количество добавленных."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        for key in keys_list:
-            if key.strip():
-                await db.execute("INSERT INTO product_keys (product_id, key_text) VALUES (?, ?)", (product_id, key.strip()))
-        await db.commit()
-        return len(keys_list)
+            prod = await conn.fetchrow("SELECT price, is_active FROM products WHERE id = $1", product_id)
+            if not prod or not prod['is_active']: return {"success": False, "error": "Товар недоступен"}
+            
+            final_price = int(prod['price'] * (1 - discount / 100))
+            if user['balance'] < final_price: return {"success": False, "error": "Недостаточно средств"}
+            
+            item = await conn.fetchrow("SELECT id, content FROM product_items WHERE product_id = $1 AND is_sold = 0 LIMIT 1 FOR UPDATE", product_id)
+            if not item: return {"success": False, "error": "Нет в наличии"}
+            
+            await conn.execute("UPDATE users SET balance = balance - $1, total_spent = total_spent + $1, purchases_count = purchases_count + 1 WHERE user_id = $2", final_price, user_id)
+            await conn.execute("UPDATE product_items SET is_sold = 1, sold_to = $1, sold_date = CURRENT_TIMESTAMP WHERE id = $2", user_id, item['id'])
+            await conn.execute("INSERT INTO orders (user_id, product_id, price) VALUES ($1, $2, $3)", user_id, product_id, final_price)
+            
+            return {"success": True, "content": item['content'], "balance": user['balance'] - final_price, "price": final_price}
 
 async def get_all_users_ids() -> List[int]:
-    """Получить ID всех пользователей для рассылки."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT user_id FROM users WHERE is_banned = 0") as cursor:
-            rows = await cursor.fetchall()
-            return [row[0] for row in rows]
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT user_id FROM users WHERE is_banned = 0")
+        return [r['user_id'] for r in rows]
+
+async def get_stats() -> Dict[str, int]:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        users = await conn.fetchrow("SELECT COUNT(*) as cnt FROM users")
+        sales = await conn.fetchrow("SELECT COALESCE(SUM(price), 0) as total FROM orders")
+        orders = await conn.fetchrow("SELECT COUNT(*) as cnt FROM orders")
+        return {"users": users['cnt'], "sales": sales['total'], "orders": orders['cnt']}
+
+async def get_buttons(screen: str) -> List[Dict[str, Any]]:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT * FROM buttons WHERE screen = $1 AND is_active = 1 ORDER BY row_num, position", screen)
+        return [dict(r) for r in rows]
+
+async def update_button(button_key: str, **kwargs):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        for key, value in kwargs.items():
+            await conn.execute(f"UPDATE buttons SET {key} = $1 WHERE button_key = $2", value, button_key)
