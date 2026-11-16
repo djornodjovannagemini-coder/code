@@ -23,7 +23,7 @@ async def cmd_start(message: Message):
     kb = await addin.main_menu_kb()
     if photo: await message.answer_photo(photo=photo, caption=text, reply_markup=kb)
     else: await message.answer(text, reply_markup=kb)
-
+    
 @router.callback_query(F.data == "menu:profile")
 async def show_profile(call: CallbackQuery):
     user = await db.get_user(call.from_user.id)
