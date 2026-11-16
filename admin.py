@@ -5,16 +5,14 @@ from aiogram import Router, F, Bot
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup
+from aiogram.types import Message, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-import aiosqlite # Оставил для совместимости, но используем db
 
 import database as db
 import addin
 
 logger = logging.getLogger(__name__)
 
-# ЖЕСТКАЯ ОЧИСТКА ID
 raw_ids = os.getenv("ADMIN_IDS", "")
 ADMIN_IDS = [int(x.strip()) for x in raw_ids.split(",") if x.strip().isdigit()]
 logger.info(f"🔑 Загруженные ID админов: {ADMIN_IDS}")
