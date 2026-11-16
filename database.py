@@ -114,16 +114,84 @@ async def init_db():
         for k, v in default_settings:
             await conn.execute("INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING", k, v)
 
+        # Ключи кнопок всегда вида screen:key; старые записи переименовываются один раз
+        await conn.execute("UPDATE buttons SET button_key = screen || ':' || button_key WHERE button_key NOT LIKE '%:%'")
+
         default_buttons = [
-            ('main', 'profile', 'Профиль', 'menu:profile', None, 'primary', '6032693626394382504', 1, 1),
-            ('main', 'shop', 'Магазин', 'menu:shop', None, 'primary', '5348475279960456198', 1, 2),
-            ('main', 'info', 'Информация', 'menu:info', None, 'success', '5348507247402040764', 2, 1),
-            ('main', 'channel', 'Канал', None, 'https://t.me/anthropc_claude', 'success', '5260268501515377807', 2, 2),
-            ('main', 'support', 'Поддержка', None, 'https://t.me/cxepy', 'danger', '5258513401784573443', 3, 1),
-            ('profile', 'deposit', 'Пополнить баланс', 'profile:deposit', None, 'success', '5429098361636560179', 1, 1),
-            ('profile', 'purchases', 'Покупки', 'profile:purchases', None, 'primary', '5429412504134525920', 2, 1),
-            ('profile', 'promo', 'Промокод', 'profile:promo', None, 'primary', '5427375590124598857', 2, 2),
-            ('profile', 'ref', 'Рефералка', 'profile:referral', None, 'primary', '5429256253224299845', 3, 1),
+            ('main', 'main:profile', 'Профиль', 'menu:profile', None, 'primary', '6032693626394382504', 1, 1),
+            ('main', 'main:shop', 'Магазин', 'menu:shop', None, 'primary', '5348475279960456198', 1, 2),
+            ('main', 'main:info', 'Информация', 'menu:info', None, 'success', '5348507247402040764', 2, 1),
+            ('main', 'main:channel', 'Канал', None, 'https://t.me/anthropc_claude', 'success', '5260268501515377807', 2, 2),
+            ('main', 'main:support', 'Поддержка', None, 'https://t.me/cxepy', 'danger', '5258513401784573443', 3, 1),
+            ('profile', 'profile:deposit', 'Пополнить баланс', 'profile:deposit', None, 'success', '5429098361636560179', 1, 1),
+            ('profile', 'profile:purchases', 'Покупки', 'profile:purchases', None, 'primary', '5429412504134525920', 2, 1),
+            ('profile', 'profile:promo', 'Промокод', 'profile:promo', None, 'primary', '5427375590124598857', 2, 2),
+            ('profile', 'profile:ref', 'Рефералка', 'profile:referral', None, 'primary', '5429256253224299845', 3, 1),
+            ('profile', 'profile:back', 'Назад', 'menu:back', None, 'danger', '5888484185261216745', 9, 1),
+            ('shop', 'shop:back', 'Назад', 'menu:back', None, 'danger', '5888484185261216745', 9, 1),
+            ('deposit', 'deposit:custom', 'Своя сумма', 'dep:custom', None, 'primary', '5427016470729127056', 8, 1),
+            ('deposit', 'deposit:back', 'Назад', 'menu:profile', None, 'danger', '5888484185261216745', 9, 1),
+            ('product', 'product:buy', 'Купить', 'buy:{id}', None, 'success', '5769126056262898415', 1, 1),
+            ('product', 'product:back', 'Назад', 'menu:shop', None, 'danger', '5888484185261216745', 2, 1),
+            ('product_back', 'product_back:back', 'Назад', 'menu:shop', None, 'danger', '5888484185261216745', 1, 1),
+            ('purchases', 'purchases:back', 'Назад', 'menu:profile', None, 'danger', '5888484185261216745', 9, 1),
+            ('promo', 'promo:back', 'Назад', 'menu:profile', None, 'danger', '5888484185261216745', 9, 1),
+            ('promo_active', 'promo_active:reset', 'Отменить промокод', 'promo:reset', None, 'danger', '5888484185261216745', 1, 1),
+            ('promo_active', 'promo_active:back', 'Назад', 'profile:promo', None, 'danger', '5888484185261216745', 2, 1),
+            ('info', 'info:back', 'Назад', 'menu:back', None, 'danger', '5888484185261216745', 9, 1),
+            ('ref', 'ref:back', 'Назад', 'menu:profile', None, 'danger', '5888484185261216745', 9, 1),
+            ('back_shop', 'back_shop:back', 'Назад', 'menu:shop', None, 'danger', '5888484185261216745', 1, 1),
+            ('to_deposit', 'to_deposit:go', 'Пополнить баланс', 'profile:deposit', None, 'success', '5429098361636560179', 1, 1),
+            ('to_profile', 'to_profile:back', 'Назад', 'menu:profile', None, 'danger', '5888484185261216745', 1, 1),
+            ('cancel', 'cancel:back', 'Отмена', 'profile:deposit', None, 'danger', '5888484185261216745', 1, 1),
+            ('choose_payment', 'choose:crypto', 'CryptoBot', 'dep:pay:{id}', None, 'primary', '5361836987642815474', 1, 1),
+            ('choose_payment', 'choose:admin', 'Через админа', None, '{support}', 'primary', '5426948678965307932', 1, 2),
+            ('crypto_pay', 'crypto_pay:pay', 'Оплатить', None, '{url}', 'success', '5429098361636560179', 1, 1),
+            ('crypto_pay', 'crypto_pay:check', 'Проверить оплату', 'dep:check:{id}', None, 'primary', '5427398138702899667', 2, 1),
+            ('crypto_pay', 'crypto_pay:back', 'Назад', 'dep:back:{id}', None, 'danger', '5888484185261216745', 3, 1),
+            ('crypto_expired', 'crypto_expired:new', 'Создать новый счёт', 'dep:pay:{id}', None, 'success', '5429098361636560179', 1, 1),
+            ('crypto_expired', 'crypto_expired:back', 'Назад', 'dep:back:{id}', None, 'danger', '5888484185261216745', 2, 1),
+            ('announce', 'announce:go', 'Перейти к товару', 'shop:item:{id}', None, 'success', '5429412504134525920', 1, 1),
+            ('adm_main', 'adm_main:prod', '📦 Товары', 'adm:prod', None, 'primary', None, 1, 1),
+            ('adm_main', 'adm_main:users', '👥 Юзеры', 'adm:users', None, 'primary', None, 1, 2),
+            ('adm_main', 'adm_main:orders', '🧾 Заказы', 'adm:orders', None, 'primary', None, 2, 1),
+            ('adm_main', 'adm_main:promos', '🎟 Промокоды', 'adm:promos', None, 'primary', None, 2, 2),
+            ('adm_main', 'adm_main:broadcast', '📢 Рассылка', 'adm:broadcast', None, 'primary', None, 3, 1),
+            ('adm_main', 'adm_main:design', '🎨 Оформление', 'adm:design', None, 'primary', None, 3, 2),
+            ('adm_main', 'adm_main:settings', '⚙️ Настройки', 'adm:settings', None, 'primary', None, 4, 1),
+            ('adm_main', 'adm_main:stats', '📊 Статистика', 'adm:stats', None, 'primary', None, 4, 2),
+            ('adm_main', 'adm_main:finance', '💳 Финансы', 'adm:finance', None, 'primary', None, 5, 1),
+            ('adm_main', 'adm_main:system', '🛡 Система', 'adm:system', None, 'danger', None, 5, 2),
+            ('adm_main', 'adm_main:exit', 'Выход', 'menu:back', None, 'danger', '5888484185261216745', 6, 1),
+            ('adm_back', 'adm_back:back', 'Назад', 'adm:menu', None, 'danger', '5888484185261216745', 1, 1),
+            ('adm_products', 'adm_products:add', '➕ Добавить', 'adm:prod:add', None, 'success', None, 1, 1),
+            ('adm_products', 'adm_products:stock', '📥 Пополнить остатки', 'adm:prod:stock', None, 'success', None, 2, 1),
+            ('adm_products', 'adm_products:toggle', '👁 Скрыть/Показать', 'adm:prod:toggle', None, 'primary', None, 3, 1),
+            ('adm_products', 'adm_products:del', '🗑 Удалить', 'adm:prod:del', None, 'danger', None, 4, 1),
+            ('adm_products', 'adm_products:back', 'Назад', 'adm:menu', None, 'danger', '5888484185261216745', 9, 1),
+            ('adm_product_pick', 'adm_product_pick:back', 'Назад', 'adm:prod', None, 'danger', '5888484185261216745', 9, 1),
+            ('adm_users', 'adm_users:bal', '💰 Изменить баланс', 'adm:users:bal', None, 'success', None, 1, 1),
+            ('adm_users', 'adm_users:ban', '⛔️ Забанить / Разбанить', 'adm:users:ban', None, 'danger', None, 2, 1),
+            ('adm_users', 'adm_users:list', '📋 Список юзеров', 'adm:users:list', None, 'primary', None, 3, 1),
+            ('adm_users', 'adm_users:back', 'Назад', 'adm:menu', None, 'danger', '5888484185261216745', 9, 1),
+            ('adm_user_ban', 'adm_user_ban:back', 'Назад', 'adm:users', None, 'danger', '5888484185261216745', 9, 1),
+            ('adm_design', 'adm_design:start', '🚪 Старт', 'adm:design:start', None, 'primary', None, 1, 1),
+            ('adm_design', 'adm_design:profile', '👤 Профиль', 'adm:design:profile', None, 'primary', None, 1, 2),
+            ('adm_design', 'adm_design:shop', '🛍 Магазин', 'adm:design:shop', None, 'primary', None, 1, 3),
+            ('adm_design', 'adm_design:deposit', '💰 Пополнение', 'adm:design:deposit', None, 'primary', None, 2, 1),
+            ('adm_design', 'adm_design:info', 'ℹ️ Инфо', 'adm:design:info', None, 'primary', None, 2, 2),
+            ('adm_design', 'adm_design:buttons', '🔘 Кнопки', 'adm:btn', None, 'primary', None, 2, 3),
+            ('adm_design', 'adm_design:purchases', '🛒 Покупки', 'adm:design:purchases', None, 'primary', None, 3, 1),
+            ('adm_design', 'adm_design:promo', '🎟 Промокод', 'adm:design:promo', None, 'primary', None, 3, 2),
+            ('adm_design', 'adm_design:ref', '🔗 Рефералка', 'adm:design:ref', None, 'primary', None, 3, 3),
+            ('adm_design', 'adm_design:back', 'Назад', 'adm:menu', None, 'danger', '5888484185261216745', 9, 1),
+            ('adm_settings', 'adm_settings:tech', 'Тех. работы', 'adm:settings:tech', None, 'success', None, 1, 1),
+            ('adm_settings', 'adm_settings:amounts', 'Изменить суммы пополнения', 'adm:settings:amounts', None, 'primary', None, 2, 1),
+            ('adm_settings', 'adm_settings:ref', 'Изменить реф. процент', 'adm:settings:ref', None, 'primary', None, 3, 1),
+            ('adm_settings', 'adm_settings:back', 'Назад', 'adm:menu', None, 'danger', '5888484185261216745', 9, 1),
+            ('adm_promos', 'adm_promos:add', '➕ Создать', 'adm:promos:add', None, 'success', None, 1, 1),
+            ('adm_promos', 'adm_promos:back', 'Назад', 'adm:menu', None, 'danger', '5888484185261216745', 9, 1),
+            ('adm_finance', 'adm_finance:back', 'Назад', 'adm:menu', None, 'danger', '5888484185261216745', 9, 1),
         ]
         for b in default_buttons:
             await conn.execute("""
@@ -131,8 +199,8 @@ async def init_db():
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                 ON CONFLICT (button_key) DO NOTHING
             """, *b)
-        # Кнопка каталога на экране магазина больше не нужна: товары выводятся списком из базы
-        await conn.execute("DELETE FROM buttons WHERE button_key = 'api'")
+        # Кнопка каталога больше не нужна: товары выводятся списком из базы
+        await conn.execute("DELETE FROM buttons WHERE button_key = 'shop:api' OR button_key = 'api'")
 
 
 async def get_setting(key: str, default: str = "") -> str:
@@ -453,11 +521,29 @@ async def consume_promo(user_id: int):
             await conn.execute("DELETE FROM promocodes WHERE uses_left <= 0")
 
 
-async def get_buttons(screen: str) -> List[Dict[str, Any]]:
+async def get_buttons(screen: str, only_active: bool = True) -> List[Dict[str, Any]]:
     pool = await get_pool()
     async with pool.acquire() as conn:
-        rows = await conn.fetch("SELECT * FROM buttons WHERE screen = $1 AND is_active = 1 ORDER BY row_num, position", screen)
+        if only_active:
+            rows = await conn.fetch(
+                "SELECT * FROM buttons WHERE screen = $1 AND is_active = 1 ORDER BY row_num, position", screen)
+        else:
+            rows = await conn.fetch("SELECT * FROM buttons WHERE screen = $1 ORDER BY row_num, position", screen)
         return [dict(r) for r in rows]
+
+
+async def get_button(button_key: str) -> Optional[Dict[str, Any]]:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM buttons WHERE button_key = $1", button_key)
+        return dict(row) if row else None
+
+
+async def get_button_screens() -> List[str]:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT DISTINCT screen FROM buttons ORDER BY screen")
+        return [r['screen'] for r in rows]
 
 
 async def update_button(button_key: str, **kwargs):

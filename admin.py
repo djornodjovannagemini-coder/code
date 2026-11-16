@@ -10,6 +10,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
+from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import addin
@@ -30,7 +31,8 @@ router = Router()
 router.callback_query.filter(F.from_user.id.in_(ADMIN_IDS))
 
 SCREENS = {"start": "Старт", "profile": "Профиль", "shop": "Магазин",
-           "deposit": "Пополнение", "info": "Информация"}
+           "deposit": "Пополнение", "info": "Информация",
+           "purchases": "Покупки", "promo": "Промокод", "ref": "Рефералка"}
 
 
 def is_adm(uid):
@@ -59,7 +61,7 @@ async def announce_product(bot: Bot, product_id: int, added: int, report_to: int
         f"• Доступно сейчас: <b>{stock} шт.</b>\n"
         f"• Цена: <b>{_money(product['price'])} ₽</b>"
     )
-    kb = addin.product_link_kb(product_id)
+    kb = await addin.product_link_kb(product_id)
     users = await db.get_all_users_ids()
     sent, failed = 0, 0
     for uid in users:
@@ -130,6 +132,8 @@ class Adm(StatesGroup):
     promo_code = State(); promo_discount = State(); promo_uses = State()
     # Настройки
     s_amounts = State(); s_ref = State()
+    # Редактор кнопок
+    btn_text = State(); btn_emoji = State(); btn_action = State(); btn_row = State()
 
 
 # ================= ГЛАВНОЕ МЕНЮ =================
@@ -138,7 +142,7 @@ async def cmd_admin(message: Message, state: FSMContext):
     if not is_adm(message.from_user.id):
         return await message.answer(f"⛔ У вас нет доступа.\nВаш ID: <code>{message.from_user.id}</code>")
     await state.clear()
-    await message.answer("🔧 <b>Админ-панель</b>", reply_markup=addin.admin_main_kb())
+    await message.answer("🔧 <b>Админ-панель</b>", reply_markup=await addin.admin_main_kb())
 
 
 @router.callback_query(F.data == "adm:menu")
@@ -146,9 +150,9 @@ async def adm_menu(call: CallbackQuery, state: FSMContext):
     await call.answer()
     await state.clear()
     try:
-        await call.message.edit_text("🔧 <b>Админ-панель</b>", reply_markup=addin.admin_main_kb())
+        await call.message.edit_text("🔧 <b>Админ-панель</b>", reply_markup=await addin.admin_main_kb())
     except Exception:
-        await call.message.answer("🔧 <b>Админ-панель</b>", reply_markup=addin.admin_main_kb())
+        await call.message.answer("🔧 <b>Админ-панель</b>", reply_markup=await addin.admin_main_kb())
 
 
 # ================= 1. ТОВАРЫ =================
@@ -166,13 +170,13 @@ async def adm_prod(call: CallbackQuery, state: FSMContext):
             stock = await db.get_product_stock(p['id'])
             mark = "🟢" if p['is_active'] else "🔴"
             text += f"\n{mark} #{p['id']} {html.escape(p['name'])} · {p['price']} ₽ · остаток {stock}"
-    await call.message.edit_text(text, reply_markup=addin.admin_products_kb())
+    await call.message.edit_text(text, reply_markup=await addin.admin_products_kb())
 
 
 @router.callback_query(F.data == "adm:prod:add")
 async def add_p1(call: CallbackQuery, state: FSMContext):
     await call.answer()
-    await call.message.edit_text("1️⃣ Введите название товара:", reply_markup=addin.admin_back_kb())
+    await call.message.edit_text("1️⃣ Введите название товара:", reply_markup=await addin.admin_back_kb())
     await state.set_state(Adm.p_name)
 
 
@@ -240,7 +244,7 @@ async def add_p6(msg: Message, state: FSMContext, bot: Bot):
     count = await db.add_product_items(pid, items)
     await state.clear()
     await msg.answer(f"Товар <b>{html.escape(data['name'])}</b> добавлен! ({count} шт.)",
-                     reply_markup=addin.admin_main_kb())
+                     reply_markup=await addin.admin_main_kb())
     asyncio.create_task(announce_product(bot, pid, count, msg.chat.id))
 
 
@@ -251,7 +255,7 @@ async def prod_toggle_list(call: CallbackQuery):
     if not products:
         return await call.answer("Товаров нет", show_alert=True)
     await call.message.edit_text("Выберите товар, чтобы скрыть/показать:",
-                                 reply_markup=addin.admin_product_pick_kb(products, "toggle"))
+                                 reply_markup=await addin.admin_product_pick_kb(products, "toggle"))
 
 
 @router.callback_query(F.data.startswith("adm:prod:toggle:"))
@@ -260,11 +264,11 @@ async def prod_toggle(call: CallbackQuery):
     pid = int(call.data.split(":")[3])
     product = await db.get_product(pid)
     if not product:
-        return await call.message.edit_text("Товар не найден", reply_markup=addin.admin_back_kb())
+        return await call.message.edit_text("Товар не найден", reply_markup=await addin.admin_back_kb())
     await db.toggle_product(pid, 0 if product['is_active'] else 1)
     products = await db.get_all_products()
     await call.message.edit_text("Выберите товар, чтобы скрыть/показать:",
-                                 reply_markup=addin.admin_product_pick_kb(products, "toggle"))
+                                 reply_markup=await addin.admin_product_pick_kb(products, "toggle"))
 
 
 @router.callback_query(F.data == "adm:prod:del")
@@ -274,7 +278,7 @@ async def prod_del_list(call: CallbackQuery):
     if not products:
         return await call.answer("Товаров нет", show_alert=True)
     await call.message.edit_text("Выберите товар для удаления (вместе с остатками):",
-                                 reply_markup=addin.admin_product_pick_kb(products, "del"))
+                                 reply_markup=await addin.admin_product_pick_kb(products, "del"))
 
 
 @router.callback_query(F.data.startswith("adm:prod:del:"))
@@ -284,7 +288,7 @@ async def prod_del(call: CallbackQuery):
     await call.answer("Удалено")
     products = await db.get_all_products()
     await call.message.edit_text("Выберите товар для удаления (вместе с остатками):",
-                                 reply_markup=addin.admin_product_pick_kb(products, "del"))
+                                 reply_markup=await addin.admin_product_pick_kb(products, "del"))
 
 
 @router.callback_query(F.data == "adm:prod:stock")
@@ -294,7 +298,7 @@ async def prod_stock_list(call: CallbackQuery):
     if not products:
         return await call.answer("Товаров нет", show_alert=True)
     await call.message.edit_text("Выберите товар, чтобы добавить позиции:",
-                                 reply_markup=addin.admin_product_pick_kb(products, "stock"))
+                                 reply_markup=await addin.admin_product_pick_kb(products, "stock"))
 
 
 @router.callback_query(F.data.startswith("adm:prod:stock:"))
@@ -303,7 +307,7 @@ async def prod_stock_pick(call: CallbackQuery, state: FSMContext):
     pid = int(call.data.split(":")[3])
     product = await db.get_product(pid)
     if not product:
-        return await call.message.edit_text("Товар не найден", reply_markup=addin.admin_back_kb())
+        return await call.message.edit_text("Товар не найден", reply_markup=await addin.admin_back_kb())
     await state.update_data(product_id=pid)
     await state.set_state(Adm.p_stock_items)
     await call.message.edit_text(
@@ -327,7 +331,7 @@ async def prod_stock_add(msg: Message, state: FSMContext, bot: Bot):
     stock = await db.get_product_stock(data['product_id'])
     await state.clear()
     await msg.answer(f"Добавлено {count} шт. Всего в наличии: {stock}.",
-                     reply_markup=addin.admin_main_kb())
+                     reply_markup=await addin.admin_main_kb())
     asyncio.create_task(announce_product(bot, data['product_id'], count, msg.chat.id))
 
 
@@ -338,7 +342,7 @@ async def adm_users(call: CallbackQuery, state: FSMContext):
     await state.clear()
     total = await db.count_users()
     await call.message.edit_text(f"👥 <b>Пользователи</b>\n\nВсего: <b>{total}</b>",
-                                 reply_markup=addin.admin_users_kb())
+                                 reply_markup=await addin.admin_users_kb())
 
 
 @router.callback_query(F.data == "adm:users:list")
@@ -346,19 +350,19 @@ async def users_list(call: CallbackQuery):
     await call.answer()
     users = await db.get_users(limit=10)
     if not users:
-        return await call.message.edit_text("Юзеров нет", reply_markup=addin.admin_users_kb())
+        return await call.message.edit_text("Юзеров нет", reply_markup=await addin.admin_users_kb())
     text = "👥 <b>Последние пользователи</b>\n<b>━━━━━━━━━━━━━</b>"
     for u in users:
         mark = "⛔️" if u['is_banned'] else "•"
         text += (f"\n{mark} <a href=\"tg://user?id={u['user_id']}\">{html.escape(u['first_name'] or '—')}</a> "
                  f"· <code>{u['user_id']}</code> · {u['balance']} ₽")
-    await call.message.edit_text(text, reply_markup=addin.admin_users_kb())
+    await call.message.edit_text(text, reply_markup=await addin.admin_users_kb())
 
 
 @router.callback_query(F.data == "adm:users:bal")
 async def u_bal1(call: CallbackQuery, state: FSMContext):
     await call.answer()
-    await call.message.edit_text("Введите Telegram ID пользователя:", reply_markup=addin.admin_back_kb())
+    await call.message.edit_text("Введите Telegram ID пользователя:", reply_markup=await addin.admin_back_kb())
     await state.set_state(Adm.u_id)
 
 
@@ -389,14 +393,14 @@ async def u_bal3(msg: Message, state: FSMContext):
     await db.add_balance(data['uid'], amount)
     user = await db.get_user(data['uid'])
     await msg.answer(f"✅ Баланс изменён на {amount:+d} ₽.\nТеперь: {user['balance']} ₽.",
-                     reply_markup=addin.admin_main_kb())
+                     reply_markup=await addin.admin_main_kb())
     await state.clear()
 
 
 @router.callback_query(F.data == "adm:users:ban")
 async def u_ban1(call: CallbackQuery, state: FSMContext):
     await call.answer()
-    await call.message.edit_text("Введите Telegram ID пользователя:", reply_markup=addin.admin_back_kb())
+    await call.message.edit_text("Введите Telegram ID пользователя:", reply_markup=await addin.admin_back_kb())
     await state.set_state(Adm.u_ban_id)
 
 
@@ -413,7 +417,7 @@ async def u_ban2(msg: Message, state: FSMContext):
     status = "забанен" if user['is_banned'] else "активен"
     await msg.answer(
         f"{html.escape(user['first_name'] or '—')} · <code>{user['user_id']}</code>\nСтатус: {status}",
-        reply_markup=addin.admin_user_ban_kb(user),
+        reply_markup=await addin.admin_user_ban_kb(user),
     )
 
 
@@ -425,7 +429,7 @@ async def u_ban_do(call: CallbackQuery):
     user = await db.get_user(uid)
     await call.message.edit_text(
         f"{html.escape(user['first_name'] or '—')} · <code>{uid}</code>\nСтатус: забанен",
-        reply_markup=addin.admin_user_ban_kb(user),
+        reply_markup=await addin.admin_user_ban_kb(user),
     )
 
 
@@ -437,7 +441,7 @@ async def u_unban_do(call: CallbackQuery):
     user = await db.get_user(uid)
     await call.message.edit_text(
         f"{html.escape(user['first_name'] or '—')} · <code>{uid}</code>\nСтатус: активен",
-        reply_markup=addin.admin_user_ban_kb(user),
+        reply_markup=await addin.admin_user_ban_kb(user),
     )
 
 
@@ -448,13 +452,13 @@ async def adm_orders(call: CallbackQuery):
     orders = await db.get_recent_orders(limit=15)
     if not orders:
         return await call.message.edit_text("🧾 <b>Заказы</b>\n\nЗаказов пока нет.",
-                                            reply_markup=addin.admin_back_kb())
+                                            reply_markup=await addin.admin_back_kb())
     text = "🧾 <b>Последние заказы</b>\n<b>━━━━━━━━━━━━━</b>"
     for o in orders:
         when = o['order_date'].strftime("%d.%m %H:%M") if o['order_date'] else "—"
         text += (f"\n#{o['id']} · {html.escape(o['name'] or '—')} · {o['price']} ₽\n"
                  f"   <code>{o['user_id']}</code> · {when}")
-    await call.message.edit_text(text, reply_markup=addin.admin_back_kb())
+    await call.message.edit_text(text, reply_markup=await addin.admin_back_kb())
 
 
 # ================= 4. ПРОМОКОДЫ =================
@@ -468,14 +472,14 @@ async def adm_promos(call: CallbackQuery, state: FSMContext):
         text += "\n\nПромокодов нет."
     else:
         text += "\n\nНажмите на промокод, чтобы удалить."
-    await call.message.edit_text(text, reply_markup=addin.admin_promos_kb(promos))
+    await call.message.edit_text(text, reply_markup=await addin.admin_promos_kb(promos))
 
 
 @router.callback_query(F.data == "adm:promos:add")
 async def promo_add1(call: CallbackQuery, state: FSMContext):
     await call.answer()
     await call.message.edit_text("Введите текст промокода (например WELCOME10):",
-                                 reply_markup=addin.admin_back_kb())
+                                 reply_markup=await addin.admin_back_kb())
     await state.set_state(Adm.promo_code)
 
 
@@ -513,7 +517,7 @@ async def promo_add4(msg: Message, state: FSMContext):
     await state.clear()
     promos = await db.list_promos()
     await msg.answer(f"✅ Промокод <code>{html.escape(data['code'])}</code> создан.",
-                     reply_markup=addin.admin_promos_kb(promos))
+                     reply_markup=await addin.admin_promos_kb(promos))
 
 
 @router.callback_query(F.data.startswith("adm:promos:del:"))
@@ -523,7 +527,7 @@ async def promo_del(call: CallbackQuery):
     await call.answer("Удалён")
     promos = await db.list_promos()
     text = "🎟 <b>Промокоды</b>" + ("\n\nПромокодов нет." if not promos else "\n\nНажмите на промокод, чтобы удалить.")
-    await call.message.edit_text(text, reply_markup=addin.admin_promos_kb(promos))
+    await call.message.edit_text(text, reply_markup=await addin.admin_promos_kb(promos))
 
 
 # ================= 5. РАССЫЛКА =================
@@ -531,7 +535,7 @@ async def promo_del(call: CallbackQuery):
 async def adm_broadcast(call: CallbackQuery, state: FSMContext):
     await call.answer()
     await call.message.edit_text("📢 Отправьте сообщение для рассылки (текст или фото):",
-                                 reply_markup=addin.admin_back_kb())
+                                 reply_markup=await addin.admin_back_kb())
     await state.set_state(Adm.b_msg)
 
 
@@ -555,7 +559,7 @@ async def do_broadcast(msg: Message, state: FSMContext, bot: Bot):
             logger.debug("Рассылка: не доставлено %s (%s)", uid, e)
         await asyncio.sleep(0.05)
     await msg.answer(f"✅ Доставлено: {sent}/{len(users)} (ошибок: {failed})",
-                     reply_markup=addin.admin_main_kb())
+                     reply_markup=await addin.admin_main_kb())
 
 
 # ================= 6. ОФОРМЛЕНИЕ =================
@@ -564,7 +568,7 @@ async def adm_design(call: CallbackQuery, state: FSMContext):
     await call.answer()
     await state.clear()
     await call.message.edit_text("🎨 <b>Оформление</b>\n\nВыберите экран:",
-                                 reply_markup=addin.admin_design_kb())
+                                 reply_markup=await addin.admin_design_kb())
 
 
 @router.callback_query(F.data.startswith("adm:design:"))
@@ -678,7 +682,7 @@ async def adm_settings(call: CallbackQuery, state: FSMContext):
     await state.clear()
     tech = await db.get_setting("tech_work", "0")
     await call.message.edit_text(await settings_text(),
-                                 reply_markup=addin.admin_settings_kb(tech, payments.enabled()))
+                                 reply_markup=await addin.admin_settings_kb(tech, payments.enabled()))
 
 
 @router.callback_query(F.data == "adm:settings:tech")
@@ -688,7 +692,7 @@ async def toggle_tech(call: CallbackQuery):
     await db.set_setting("tech_work", new_tech)
     await call.answer("Тех. работы " + ("включены" if new_tech == "1" else "выключены"))
     await call.message.edit_text(await settings_text(),
-                                 reply_markup=addin.admin_settings_kb(new_tech, payments.enabled()))
+                                 reply_markup=await addin.admin_settings_kb(new_tech, payments.enabled()))
 
 
 @router.callback_query(F.data == "adm:settings:amounts")
@@ -708,13 +712,13 @@ async def set_amounts2(msg: Message, state: FSMContext):
         return await state.clear()
     if msg.text == "-":
         await state.clear()
-        return await msg.answer("Отменено.", reply_markup=addin.admin_main_kb())
+        return await msg.answer("Отменено.", reply_markup=await addin.admin_main_kb())
     parts = [p.strip() for p in (msg.text or "").replace(" ", "").split(",") if p.strip()]
     if not parts or not all(p.isdigit() for p in parts):
         return await msg.answer("❌ Только числа через запятую.")
     await db.set_setting("deposit_amounts", ",".join(parts))
     await state.clear()
-    await msg.answer(f"✅ Суммы обновлены: {', '.join(parts)}", reply_markup=addin.admin_main_kb())
+    await msg.answer(f"✅ Суммы обновлены: {', '.join(parts)}", reply_markup=await addin.admin_main_kb())
 
 
 @router.callback_query(F.data == "adm:settings:ref")
@@ -730,12 +734,12 @@ async def set_ref2(msg: Message, state: FSMContext):
         return await state.clear()
     if msg.text == "-":
         await state.clear()
-        return await msg.answer("Отменено.", reply_markup=addin.admin_main_kb())
+        return await msg.answer("Отменено.", reply_markup=await addin.admin_main_kb())
     if not msg.text.isdigit() or not (0 <= int(msg.text) <= 50):
         return await msg.answer("❌ Число от 0 до 50.")
     await db.set_setting("ref_percent", msg.text)
     await state.clear()
-    await msg.answer(f"✅ Реф. процент: {msg.text}%", reply_markup=addin.admin_main_kb())
+    await msg.answer(f"✅ Реф. процент: {msg.text}%", reply_markup=await addin.admin_main_kb())
 
 
 # ================= 8. СТАТИСТИКА =================
@@ -751,7 +755,7 @@ async def adm_stats(call: CallbackQuery):
             f"💳 Пополнений: <b>{s['topped']} ₽</b>\n"
             f"⏳ Необработанных заявок: <b>{s['pending']}</b>\n"
             f"📦 Товаров: <b>{len(products)}</b>")
-    await call.message.edit_text(text, reply_markup=addin.admin_back_kb())
+    await call.message.edit_text(text, reply_markup=await addin.admin_back_kb())
 
 
 # ================= 9. ФИНАНСЫ =================
@@ -776,7 +780,7 @@ async def render_finance(call: CallbackQuery):
         for d in paid:
             when = d['paid_at'].strftime("%d.%m %H:%M") if d['paid_at'] else "—"
             text += f"#{d['id']} · {d['amount']} ₽ · {when}\n"
-    await call.message.edit_text(text, reply_markup=addin.admin_pending_deposits_kb(pending))
+    await call.message.edit_text(text, reply_markup=await addin.admin_pending_deposits_kb(pending))
 
 
 @router.callback_query(F.data.startswith("adm:dep:ok:"))
@@ -809,7 +813,7 @@ async def bot_credit(bot: Bot, dep_id: int) -> bool:
         await bot.send_message(
             dep['user_id'],
             f"✅ Баланс пополнен на <b>{dep['amount']} ₽</b>\nТекущий баланс: <b>{result['balance']} ₽</b>",
-            reply_markup=addin.simple_kb("menu:profile"),
+            reply_markup=await addin.simple_kb("to_profile"),
         )
     except Exception:
         logger.warning("Не удалось уведомить юзера %s о пополнении", dep['user_id'])
@@ -833,4 +837,327 @@ async def adm_system(call: CallbackQuery):
             f"📦 Товаров: <b>{len(products)}</b> · позиций в наличии: <b>{stock}</b>\n"
             f"💳 Оплата: {'CryptoBot' if payments.enabled() else 'вручную (нет токена)'}\n"
             f"🛠 Тех. работы: <b>{'ВКЛ' if await db.get_setting('tech_work', '0') == '1' else 'ВЫКЛ'}</b>")
-    await call.message.edit_text(text, reply_markup=addin.admin_back_kb())
+    await call.message.edit_text(text, reply_markup=await addin.admin_back_kb())
+
+
+# ================= 11. РЕДАКТОР КНОПОК =================
+BUTTON_SCREENS = [
+    ("main", "Главное меню"),
+    ("profile", "Профиль"),
+    ("shop", "Магазин"),
+    ("deposit", "Пополнение баланса"),
+    ("product", "Карточка товара"),
+    ("product_back", "Карточка: нет в наличии"),
+    ("purchases", "Мои покупки"),
+    ("promo", "Промокод"),
+    ("promo_active", "Активный промокод"),
+    ("info", "Информация"),
+    ("ref", "Рефералка"),
+    ("cancel", "Отмена ввода суммы"),
+    ("to_deposit", "Кнопка «Пополнить»"),
+    ("to_profile", "Кнопка «Назад в профиль»"),
+    ("back_shop", "Кнопка «Назад в магазин»"),
+    ("choose_payment", "Выбор способа оплаты"),
+    ("crypto_pay", "Оплата криптой"),
+    ("crypto_expired", "Счёт истёк"),
+    ("announce", "Анонс пополнения товара"),
+    ("adm_main", "Админка: главное"),
+    ("adm_back", "Админка: «Назад»"),
+    ("adm_products", "Админка: товары"),
+    ("adm_product_pick", "Админка: выбор товара"),
+    ("adm_users", "Админка: юзеры"),
+    ("adm_user_ban", "Админка: бан"),
+    ("adm_design", "Админка: оформление"),
+    ("adm_settings", "Админка: настройки"),
+    ("adm_promos", "Админка: промокоды"),
+    ("adm_finance", "Админка: финансы"),
+]
+SCREEN_PAGE = 10
+BTN_PAGE = 8
+STYLE_NAMES = {"primary": "синий", "success": "зелёный", "danger": "красный"}
+STYLE_ORDER = ["primary", "success", "danger"]
+
+
+def split_custom_emoji(text: str, entities):
+    """Достаёт id первого кастомного эмодзи и возвращает текст без него."""
+    if not text:
+        return "", None
+    spans = []
+    for e in entities or []:
+        if e.type == "custom_emoji" and getattr(e, "custom_emoji_id", None):
+            start = _utf16_to_idx(text, e.offset)
+            end = _utf16_to_idx(text, e.offset + e.length)
+            if end > start:
+                spans.append((start, end, e.custom_emoji_id))
+    emoji_id = spans[0][2] if spans else None
+    for start, end, _ in sorted(spans, key=lambda s: s[0], reverse=True):
+        text = text[:start] + text[end:]
+    return text.strip(), emoji_id
+
+
+def _nav_row(builder, page: int, pages: int, prefix: str):
+    if pages <= 1:
+        return
+    left = addin.btn("◀", f"{prefix}{page - 1}", style="primary") if page > 0 else addin.btn("·", "adm:btn:noop", style="primary")
+    right = addin.btn("▶", f"{prefix}{page + 1}", style="primary") if page < pages - 1 else addin.btn("·", "adm:btn:noop", style="primary")
+    builder.row(left, addin.btn(f"{page + 1}/{pages}", "adm:btn:noop", style="primary"), right)
+
+
+async def render_btn_screens(call, page: int = 0):
+    pages = max(1, (len(BUTTON_SCREENS) + SCREEN_PAGE - 1) // SCREEN_PAGE)
+    page = min(max(page, 0), pages - 1)
+    builder = InlineKeyboardBuilder()
+    for key, title in BUTTON_SCREENS[page * SCREEN_PAGE:(page + 1) * SCREEN_PAGE]:
+        builder.row(addin.btn(title, f"adm:btn:s:{key}", style="primary"))
+    _nav_row(builder, page, pages, "adm:btn:p:")
+    builder.row(addin.btn("Назад", "adm:design", style="danger", emoji=addin.BACK_EMOJI))
+    text = ("🔘 <b>Кнопки</b>\n<b>━━━━━━━━━━━━━</b>\n\n"
+            "Выберите экран. Дальше можно менять текст, цвет, эмодзи, действие и ряд кнопки.")
+    await call.message.edit_text(text, reply_markup=builder.as_markup())
+
+
+async def render_screen_buttons(call, screen: str, page: int = 0):
+    buttons = await db.get_buttons(screen, only_active=False)
+    pages = max(1, (len(buttons) + BTN_PAGE - 1) // BTN_PAGE)
+    page = min(max(page, 0), pages - 1)
+    builder = InlineKeyboardBuilder()
+    for b in buttons[page * BTN_PAGE:(page + 1) * BTN_PAGE]:
+        mark = "" if b['is_active'] else "🚫 "
+        builder.row(addin.btn(f"{mark}{b['text']}", f"adm:btn:e:{b['button_key']}",
+                              style=b['style'] or "primary", emoji=b['emoji_id'] or None))
+    _nav_row(builder, page, pages, f"adm:btn:pg:{screen}:")
+    builder.row(addin.btn("К экранам", "adm:btn", style="danger", emoji=addin.BACK_EMOJI))
+    title = dict(BUTTON_SCREENS).get(screen, screen)
+    text = (f"🔘 <b>{html.escape(title)}</b>\n<b>━━━━━━━━━━━━━</b>\n\n"
+            f"Кнопок: <b>{len(buttons)}</b>\n"
+            "Кнопки показаны так, как их видят пользователи. Нажмите, чтобы изменить.")
+    await call.message.edit_text(text, reply_markup=builder.as_markup())
+
+
+async def render_button_edit(call, key: str):
+    b = await db.get_button(key)
+    if not b:
+        return await deny(call, "Кнопка не найдена")
+    if b['callback_data']:
+        action = f"callback: {b['callback_data']}"
+    elif b['url']:
+        action = f"URL: {b['url']}"
+    else:
+        action = "нет (кнопка не отправится)"
+    text = (f"🔘 <b>{html.escape(b['text'])}</b>\n<b>━━━━━━━━━━━━━</b>\n\n"
+            f"Экран: <code>{b['screen']}</code>\n"
+            f"Цвет: <b>{STYLE_NAMES.get(b['style'], b['style'])}</b>\n"
+            f"Эмодзи: <code>{b['emoji_id'] or '—'}</code>\n"
+            f"Действие: <code>{html.escape(action)}</code>\n"
+            f"Ряд: <b>{b['row_num']}</b> · Позиция: <b>{b['position']}</b>\n"
+            f"Статус: <b>{'показана' if b['is_active'] else 'скрыта'}</b>")
+    builder = InlineKeyboardBuilder()
+    builder.row(addin.btn("Текст", f"adm:btn:t:{key}", style="primary"))
+    builder.row(addin.btn("Цвет", f"adm:btn:c:{key}", style="primary"))
+    builder.row(addin.btn("Эмодзи", f"adm:btn:i:{key}", style="primary"))
+    builder.row(addin.btn("Действие", f"adm:btn:a:{key}", style="primary"))
+    builder.row(addin.btn("Скрыть" if b['is_active'] else "Показать", f"adm:btn:v:{key}", style="primary"))
+    builder.row(addin.btn("Ряд", f"adm:btn:r:{key}", style="primary"))
+    builder.row(addin.btn("К списку", f"adm:btn:s:{b['screen']}", style="danger", emoji=addin.BACK_EMOJI))
+    await call.message.edit_text(text, reply_markup=builder.as_markup())
+
+
+@router.callback_query(F.data == "adm:btn")
+async def btn_menu(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    await state.clear()
+    await render_btn_screens(call, 0)
+
+
+@router.callback_query(F.data.startswith("adm:btn:p:"))
+async def btn_menu_page(call: CallbackQuery):
+    await call.answer()
+    await render_btn_screens(call, int(call.data.split(":")[3]))
+
+
+@router.callback_query(F.data == "adm:btn:noop")
+async def btn_noop(call: CallbackQuery):
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("adm:btn:pg:"))
+async def btn_screen_page(call: CallbackQuery):
+    await call.answer()
+    _, _, _, screen, page = call.data.split(":")
+    await render_screen_buttons(call, screen, int(page))
+
+
+@router.callback_query(F.data.startswith("adm:btn:s:"))
+async def btn_screen(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    await state.clear()
+    await render_screen_buttons(call, call.data.split(":", 3)[3])
+
+
+@router.callback_query(F.data.startswith("adm:btn:e:"))
+async def btn_edit(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    await state.clear()
+    await render_button_edit(call, call.data.split(":", 3)[3])
+
+
+@router.callback_query(F.data.startswith("adm:btn:c:"))
+async def btn_color(call: CallbackQuery):
+    key = call.data.split(":", 3)[3]
+    b = await db.get_button(key)
+    if not b:
+        return await call.answer("Кнопка не найдена", show_alert=True)
+    current = b['style'] if b['style'] in STYLE_ORDER else "primary"
+    new_style = STYLE_ORDER[(STYLE_ORDER.index(current) + 1) % len(STYLE_ORDER)]
+    await db.update_button(key, style=new_style)
+    await call.answer(f"Цвет: {STYLE_NAMES[new_style]}")
+    await render_button_edit(call, key)
+
+
+@router.callback_query(F.data.startswith("adm:btn:v:"))
+async def btn_visible(call: CallbackQuery):
+    key = call.data.split(":", 3)[3]
+    b = await db.get_button(key)
+    if not b:
+        return await call.answer("Кнопка не найдена", show_alert=True)
+    await db.update_button(key, is_active=0 if b['is_active'] else 1)
+    await call.answer("Скрыта" if b['is_active'] else "Показана")
+    await render_button_edit(call, key)
+
+
+async def _btn_field_start(call, state, key, target_state, prompt):
+    b = await db.get_button(key)
+    if not b:
+        return await call.answer("Кнопка не найдена", show_alert=True)
+    await call.answer()
+    await state.set_state(target_state)
+    await state.update_data(key=key)
+    builder = InlineKeyboardBuilder()
+    builder.row(addin.btn("Отмена", f"adm:btn:e:{key}", style="danger", emoji=addin.BACK_EMOJI))
+    await call.message.edit_text(prompt, reply_markup=builder.as_markup())
+
+
+@router.callback_query(F.data.startswith("adm:btn:t:"))
+async def btn_text_start(call: CallbackQuery, state: FSMContext):
+    await _btn_field_start(
+        call, state, call.data.split(":", 3)[3], Adm.btn_text,
+        "Отправьте новый текст кнопки (до 64 символов).\n"
+        "Можно вставить кастомный эмодзи — бот сам возьмёт его ID и поставит перед текстом.\n"
+        "Отправьте <code>-</code> для отмены.")
+
+
+@router.callback_query(F.data.startswith("adm:btn:i:"))
+async def btn_emoji_start(call: CallbackQuery, state: FSMContext):
+    await _btn_field_start(
+        call, state, call.data.split(":", 3)[3], Adm.btn_emoji,
+        "Отправьте один кастомный эмодзи — он встанет перед текстом кнопки.\n"
+        "Отправьте <code>0</code>, чтобы убрать эмодзи, или <code>-</code> для отмены.")
+
+
+@router.callback_query(F.data.startswith("adm:btn:a:"))
+async def btn_action_start(call: CallbackQuery, state: FSMContext):
+    await _btn_field_start(
+        call, state, call.data.split(":", 3)[3], Adm.btn_action,
+        "Отправьте callback-данные (например <code>menu:shop</code>) или ссылку <code>https://…</code>.\n"
+        "Отправьте <code>0</code>, чтобы убрать действие, или <code>-</code> для отмены.")
+
+
+@router.callback_query(F.data.startswith("adm:btn:r:"))
+async def btn_row_start(call: CallbackQuery, state: FSMContext):
+    await _btn_field_start(
+        call, state, call.data.split(":", 3)[3], Adm.btn_row,
+        "Отправьте номер ряда (1–9), в котором должна стоять кнопка.\n"
+        "Отправьте <code>-</code> для отмены.")
+
+
+def _btn_back_kb(key: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(addin.btn("К кнопке", f"adm:btn:e:{key}", style="primary"))
+    return builder.as_markup()
+
+
+@router.message(Adm.btn_text)
+async def btn_text_set(msg: Message, state: FSMContext):
+    if not is_adm(msg.from_user.id):
+        return await state.clear()
+    key = (await state.get_data()).get('key')
+    if msg.text == "-":
+        await state.clear()
+        return await msg.answer("Отменено.")
+    text, emoji_id = split_custom_emoji(msg.text or "", msg.entities or [])
+    if not text:
+        return await msg.answer("Текст не может быть пустым.")
+    if len(text) > 64:
+        return await msg.answer("Слишком длинный текст: Telegram разрешает до 64 символов.")
+    if emoji_id:
+        await db.update_button(key, text=text, emoji_id=emoji_id)
+    else:
+        await db.update_button(key, text=text)
+    await state.clear()
+    await msg.answer(f"Текст обновлён: <b>{html.escape(text)}</b>"
+                     + (f"\nЭмодзи: <code>{emoji_id}</code>" if emoji_id else ""),
+                     reply_markup=_btn_back_kb(key))
+
+
+@router.message(Adm.btn_emoji)
+async def btn_emoji_set(msg: Message, state: FSMContext):
+    if not is_adm(msg.from_user.id):
+        return await state.clear()
+    key = (await state.get_data()).get('key')
+    raw = (msg.text or "").strip()
+    if raw == "-":
+        await state.clear()
+        return await msg.answer("Отменено.")
+    if raw == "0":
+        await db.update_button(key, emoji_id=None)
+        await state.clear()
+        return await msg.answer("Эмодзи убран.", reply_markup=_btn_back_kb(key))
+    _, emoji_id = split_custom_emoji(msg.text or "", msg.entities or [])
+    if not emoji_id:
+        return await msg.answer("Не нашёл кастомный эмодзи. Отправьте кастомный эмодзи, <code>0</code> или <code>-</code>.")
+    await db.update_button(key, emoji_id=emoji_id)
+    await state.clear()
+    await msg.answer(f"Эмодзи обновлён: <code>{emoji_id}</code>", reply_markup=_btn_back_kb(key))
+
+
+@router.message(Adm.btn_action)
+async def btn_action_set(msg: Message, state: FSMContext):
+    if not is_adm(msg.from_user.id):
+        return await state.clear()
+    key = (await state.get_data()).get('key')
+    raw = (msg.text or "").strip()
+    if raw == "-":
+        await state.clear()
+        return await msg.answer("Отменено.")
+    if raw == "0":
+        await db.update_button(key, callback_data=None)
+        await db.update_button(key, url=None)
+        await state.clear()
+        return await msg.answer("Действие убрано: кнопка не будет отображаться.", reply_markup=_btn_back_kb(key))
+    if raw.startswith("http://") or raw.startswith("https://"):
+        await db.update_button(key, url=raw)
+        await db.update_button(key, callback_data=None)
+        await state.clear()
+        return await msg.answer(f"Ссылка обновлена: <code>{html.escape(raw)}</code>", reply_markup=_btn_back_kb(key))
+    if " " in raw or len(raw.encode()) > 64:
+        return await msg.answer("Callback без пробелов и не длиннее 64 байт.")
+    await db.update_button(key, callback_data=raw)
+    await db.update_button(key, url=None)
+    await state.clear()
+    await msg.answer(f"Callback обновлён: <code>{html.escape(raw)}</code>", reply_markup=_btn_back_kb(key))
+
+
+@router.message(Adm.btn_row)
+async def btn_row_set(msg: Message, state: FSMContext):
+    if not is_adm(msg.from_user.id):
+        return await state.clear()
+    key = (await state.get_data()).get('key')
+    raw = (msg.text or "").strip()
+    if raw == "-":
+        await state.clear()
+        return await msg.answer("Отменено.")
+    if not raw.isdigit() or not (1 <= int(raw) <= 9):
+        return await msg.answer("Нужен номер ряда от 1 до 9.")
+    await db.update_button(key, row_num=int(raw))
+    await state.clear()
+    await msg.answer(f"Кнопка перенесена в ряд {int(raw)}.", reply_markup=_btn_back_kb(key))

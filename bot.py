@@ -175,7 +175,7 @@ async def show_profile(call: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "menu:info")
 async def show_info(call: CallbackQuery):
     await call.answer()
-    await show(call, await db.get_setting("info_text"), addin.simple_kb("menu:back"),
+    await show(call, await db.get_setting("info_text"), await addin.simple_kb("info"),
                await db.get_setting("info_photo"))
 
 
@@ -208,7 +208,7 @@ async def show_product(call: CallbackQuery):
         + (f" <i>(скидка {promo['discount']}%)</i>" if promo else "") + "\n"
         f"{emo(addin.PURCHASES_EMOJI, '🛒')} В наличии: <b>{stock}</b>"
     )
-    await show(call, text, addin.product_kb(product_id, stock > 0))
+    await show(call, text, await addin.product_kb(product_id, stock > 0))
 
 
 async def deliver(bot: Bot, user_id: int, product: dict, content: str) -> bool:
@@ -252,7 +252,7 @@ async def buy(call: CallbackQuery, bot: Bot):
         await call.answer("Недостаточно средств", show_alert=True)
         return await call.message.answer(
             f"Не хватает <b>{money(need)} ₽</b> — пополните баланс.",
-            reply_markup=addin.simple_kb("profile:deposit"),
+            reply_markup=await addin.simple_kb("to_deposit"),
         )
 
     if promo:
@@ -270,7 +270,7 @@ async def buy(call: CallbackQuery, bot: Bot):
         f"{emo(addin.PURCHASES_EMOJI, '🛒')} <b>{html.escape(product['name'])}</b> — куплено\n<b>━━━━━━━━━━━━━</b>\n\n"
         f"Товар отправлен сообщением выше.\n"
         f"{emo(addin.BALANCE_EMOJI, '💰')} Баланс: <b>{result['balance']} ₽</b>",
-        addin.simple_kb("menu:shop"),
+        await addin.simple_kb("back_shop"),
     )
 
 
@@ -291,7 +291,7 @@ async def show_purchases(call: CallbackQuery):
                 text += "\n\n<i>…показаны не все покупки</i>"
                 break
             text += block
-    await show(call, text, addin.simple_kb("menu:profile"))
+    await show(call, text, await addin.simple_kb("purchases"), await db.get_setting("purchases_photo"))
 
 
 @router.callback_query(F.data == "profile:deposit")
@@ -299,7 +299,7 @@ async def show_deposit(call: CallbackQuery, state: FSMContext):
     await state.clear()
     await call.answer()
     await show(call, await db.get_setting("deposit_text"),
-               addin.deposit_kb(await deposit_presets()), await db.get_setting("deposit_photo"))
+               await addin.deposit_kb(await deposit_presets()), await db.get_setting("deposit_photo"))
 
 
 @router.callback_query(F.data == "dep:custom")
@@ -309,14 +309,14 @@ async def custom_amount(call: CallbackQuery, state: FSMContext):
     max_d = await db.get_setting("max_deposit", "10000")
     await state.set_state(User.amount)
     await show(call, f"Напишите сумму в рублях цифрами, например 500 — от {money(min_d)}₽ до {money(max_d)}₽.",
-               addin.cancel_kb("profile:deposit"))
+               await addin.cancel_kb())
 
 
 @router.message(User.amount)
 async def process_amount(msg: Message, state: FSMContext, bot: Bot):
     raw = (msg.text or "").strip().replace(" ", "")
     if not raw.isdigit():
-        return await msg.answer("Только целое число, например 500.", reply_markup=addin.cancel_kb("profile:deposit"))
+        return await msg.answer("Только целое число, например 500.", reply_markup=await addin.cancel_kb())
     await state.clear()
     await start_payment(bot, msg, msg.from_user.id, int(raw))
 
@@ -333,13 +333,13 @@ async def start_payment(bot: Bot, message: Message, user_id: int, amount: int):
     max_d = int(await db.get_setting("max_deposit", "10000") or 10000)
     if amount < min_d or amount > max_d:
         text = f"Сумма должна быть от {money(min_d)}₽ до {money(max_d)}₽."
-        return await message.answer(text, reply_markup=addin.cancel_kb("profile:deposit"))
+        return await message.answer(text, reply_markup=await addin.cancel_kb())
 
     dep_id = await db.create_deposit(user_id, amount, "choose")
     await notify_admins(bot, f"💳 Заявка #{dep_id}: пополнение {amount} ₽\nЮзер: <code>{user_id}</code>")
     text = await fill("choose_text", amount=money(amount), order_id=dep_id)
     support = await db.get_setting("support_url", "https://t.me/cxepy")
-    await message.answer(text, reply_markup=addin.choose_payment_kb(dep_id, support))
+    await message.answer(text, reply_markup=await addin.choose_payment_kb(dep_id, support))
 
 
 @router.callback_query(F.data.startswith("dep:pay:"))
@@ -372,7 +372,7 @@ async def pay_crypto(call: CallbackQuery, bot: Bot):
         fee_amount=money(fee_amount), total=money(total), usd=usd, minutes=minutes,
     )
     await call.answer()
-    await show(call, text, addin.crypto_pay_kb(invoice['url'], dep_id))
+    await show(call, text, await addin.crypto_pay_kb(invoice['url'], dep_id))
     asyncio.create_task(
         watch_deposit(bot, dep_id, invoice['id'], minutes, call.message.chat.id, call.message.message_id)
     )
@@ -387,7 +387,7 @@ async def back_to_choose(call: CallbackQuery):
     await call.answer()
     text = await fill("choose_text", amount=money(dep['amount']), order_id=dep_id)
     support = await db.get_setting("support_url", "https://t.me/cxepy")
-    await show(call, text, addin.choose_payment_kb(dep_id, support))
+    await show(call, text, await addin.choose_payment_kb(dep_id, support))
 
 
 async def credit_deposit(bot: Bot, dep_id: int) -> bool:
@@ -403,7 +403,7 @@ async def credit_deposit(bot: Bot, dep_id: int) -> bool:
             dep['user_id'],
             f"{emo(addin.BALANCE_EMOJI, '💰')} Баланс пополнен на <b>{dep['amount']} ₽</b>\n"
             f"Текущий баланс: <b>{result['balance']} ₽</b>",
-            reply_markup=addin.simple_kb("menu:profile"),
+            reply_markup=await addin.simple_kb("to_profile"),
         )
     except Exception:
         logger.warning("Не удалось уведомить юзера %s о пополнении", dep['user_id'])
@@ -437,10 +437,10 @@ async def watch_deposit(bot: Bot, dep_id: int, invoice_id: str, minutes: int, ch
     text = await db.get_setting("crypto_expired_text")
     try:
         await bot.edit_message_text(text, chat_id=chat_id, message_id=message_id,
-                                    reply_markup=addin.crypto_expired_kb(dep_id))
+                                    reply_markup=await addin.crypto_expired_kb(dep_id))
     except Exception:
         try:
-            await bot.send_message(chat_id, text, reply_markup=addin.crypto_expired_kb(dep_id))
+            await bot.send_message(chat_id, text, reply_markup=await addin.crypto_expired_kb(dep_id))
         except Exception:
             logger.warning("Не удалось сообщить об истечении счёта %s", dep_id)
 
@@ -462,7 +462,7 @@ async def check_deposit(call: CallbackQuery, bot: Bot):
         user = await db.get_user(call.from_user.id)
         text = (f"{emo(addin.BALANCE_EMOJI, '💰')} Баланс пополнен на <b>{money(dep['amount'])} ₽</b>\n"
                 f"Текущий баланс: <b>{money(user['balance'] if user else dep['amount'])} ₽</b>")
-        return await show(call, text, addin.simple_kb("menu:profile"))
+        return await show(call, text, await addin.simple_kb("to_profile"))
 
     expired = dep['status'] == 'canceled' or (
         dep.get('expires_at') and dep['expires_at'] < datetime.now(timezone.utc).replace(tzinfo=None)
@@ -470,7 +470,7 @@ async def check_deposit(call: CallbackQuery, bot: Bot):
     if expired:
         await call.answer()
         text = await db.get_setting("crypto_expired_text")
-        return await show(call, text, addin.crypto_expired_kb(dep_id))
+        return await show(call, text, await addin.crypto_expired_kb(dep_id))
 
     await deny(call, "Оплата не найдена. Если вы только что заплатили — подождите минуту.")
 
@@ -482,9 +482,10 @@ async def show_promo(call: CallbackQuery, state: FSMContext):
     text = await db.get_setting("promo_text")
     if active:
         text += f"\n\n{emo(addin.PROMO_EMOJI, '🎟')} Активен: <b>{html.escape(active['code'])}</b> · скидка <b>{active['discount']}%</b>"
-        return await show(call, text, addin.promo_active_kb())
+        return await show(call, text, await addin.promo_active_kb(), await db.get_setting("promo_photo"))
     await state.set_state(User.promo)
-    await show(call, text + "\nНапример: <code>WELCOME10</code>", addin.simple_kb("menu:profile"))
+    await show(call, text + "\nНапример: <code>WELCOME10</code>", await addin.simple_kb("promo"),
+               await db.get_setting("promo_photo"))
 
 
 @router.message(User.promo)
@@ -494,15 +495,15 @@ async def apply_promo(msg: Message, state: FSMContext):
         return await msg.answer("Отправьте промокод текстом.")
     promo = await db.get_promo(code)
     if not promo:
-        return await msg.answer("Промокод не найден.", reply_markup=addin.simple_kb("profile:promo"))
+        return await msg.answer("Промокод не найден.", reply_markup=await addin.simple_kb("promo"))
     if promo['uses_left'] <= 0:
-        return await msg.answer("Промокод больше не действует.", reply_markup=addin.simple_kb("profile:promo"))
+        return await msg.answer("Промокод больше не действует.", reply_markup=await addin.simple_kb("promo"))
     await db.set_user_promo(msg.from_user.id, promo['code'])
     await state.clear()
     await msg.answer(
         f"{emo(addin.PROMO_EMOJI, '🎟')} Промокод <code>{html.escape(promo['code'])}</code> активирован: "
         f"скидка <b>{promo['discount']}%</b> на следующую покупку.",
-        reply_markup=addin.simple_kb("menu:profile"),
+        reply_markup=await addin.simple_kb("to_profile"),
     )
 
 
@@ -510,7 +511,8 @@ async def apply_promo(msg: Message, state: FSMContext):
 async def reset_promo(call: CallbackQuery):
     await db.set_user_promo(call.from_user.id, None)
     await call.answer("Промокод отменён")
-    await show(call, await db.get_setting("promo_text"), addin.simple_kb("menu:profile"))
+    await show(call, await db.get_setting("promo_text"), await addin.simple_kb("promo"),
+               await db.get_setting("promo_photo"))
 
 
 @router.callback_query(F.data == "profile:referral")
@@ -527,7 +529,7 @@ async def show_referral(call: CallbackQuery):
         earned=user['ref_earned'] or 0,
         link=link,
     )
-    await show(call, text, addin.simple_kb("menu:profile"))
+    await show(call, text, await addin.simple_kb("ref"), await db.get_setting("ref_photo"))
 
 
 @router.callback_query()
