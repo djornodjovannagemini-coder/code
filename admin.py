@@ -16,6 +16,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 import addin
 import database as db
 import payments
+import subscription
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,7 @@ SCREENS = {"start": "Старт", "profile": "Профиль", "shop": "Мага
            "purchases": "Покупки", "promo": "Промокод", "ref": "Рефералка",
            "terms": "Пользовательское соглашение", "privacy": "Политика конфиденциальности",
            "agreement": "Экран согласия", "cashera_pay": "Оплата Cashera",
-           "cashera_expired": "Ссылка Cashera истекла"}
+           "cashera_expired": "Ссылка Cashera истекла", "subscribe": "Подписка на канал"}
 
 
 def is_adm(uid):
@@ -134,7 +135,7 @@ class Adm(StatesGroup):
     # Промокоды
     promo_code = State(); promo_discount = State(); promo_uses = State()
     # Настройки
-    s_amounts = State(); s_ref = State()
+    s_amounts = State(); s_ref = State(); s_subchannel = State()
     # Редактор кнопок
     btn_text = State(); btn_emoji = State(); btn_action = State(); btn_row = State()
 
@@ -672,13 +673,16 @@ async def settings_text():
     max_d = await db.get_setting("max_deposit", "10000")
     pay = "✅ CryptoBot подключён" if payments.enabled() else "⚠️ токен не задан, оплата вручную"
     agree = "ВКЛ" if await db.get_setting("require_agreement", "1") == "1" else "ВЫКЛ"
+    sub = "ВКЛ" if await subscription.enabled() else "ВЫКЛ"
+    sub_channel = await subscription.channel()
     return (f"⚙️ <b>Настройки</b>\n<b>━━━━━━━━━━━━━</b>\n\n"
             f"🛠 Тех. работы: <b>{'ВКЛ' if tech == '1' else 'ВЫКЛ'}</b>\n"
             f"💰 Суммы пополнения: <b>{amounts}</b>\n"
             f"📉 Лимиты: <b>{min_d}–{max_d} ₽</b>\n"
             f"🔗 Реф. процент: <b>{ref}%</b>\n"
             f"💳 Оплата: {pay}\n"
-            f"📄 Согласие при старте: <b>{agree}</b>")
+            f"📄 Согласие при старте: <b>{agree}</b>\n"
+            f"📢 Подписка на канал: <b>{sub}</b> · <code>{html.escape(sub_channel)}</code>")
 
 
 @router.callback_query(F.data == "adm:settings")
@@ -687,7 +691,9 @@ async def adm_settings(call: CallbackQuery, state: FSMContext):
     await state.clear()
     tech = await db.get_setting("tech_work", "0")
     await call.message.edit_text(await settings_text(),
-                                 reply_markup=await addin.admin_settings_kb(tech, payments.enabled(), await db.get_setting("require_agreement", "1")))
+                                 reply_markup=await addin.admin_settings_kb(
+                                     tech, payments.enabled(), await db.get_setting("require_agreement", "1"),
+                                     await subscription.enabled(), await subscription.channel()))
 
 
 @router.callback_query(F.data == "adm:settings:tech")
@@ -697,7 +703,9 @@ async def toggle_tech(call: CallbackQuery):
     await db.set_setting("tech_work", new_tech)
     await call.answer("Тех. работы " + ("включены" if new_tech == "1" else "выключены"))
     await call.message.edit_text(await settings_text(),
-                                 reply_markup=await addin.admin_settings_kb(new_tech, payments.enabled(), await db.get_setting("require_agreement", "1")))
+                                 reply_markup=await addin.admin_settings_kb(
+                                     new_tech, payments.enabled(), await db.get_setting("require_agreement", "1"),
+                                     await subscription.enabled(), await subscription.channel()))
 
 
 @router.callback_query(F.data == "adm:settings:agree")
@@ -708,7 +716,66 @@ async def toggle_agreement(call: CallbackQuery):
     await call.answer("Согласие " + ("включено" if new_value == "1" else "выключено"))
     tech = await db.get_setting("tech_work", "0")
     await call.message.edit_text(await settings_text(),
-                                 reply_markup=await addin.admin_settings_kb(tech, payments.enabled(), await db.get_setting("require_agreement", "1")))
+                                 reply_markup=await addin.admin_settings_kb(
+                                     tech, payments.enabled(), await db.get_setting("require_agreement", "1"),
+                                     await subscription.enabled(), await subscription.channel()))
+
+
+@router.callback_query(F.data == "adm:settings:sub")
+async def toggle_subscription(call: CallbackQuery):
+    current = await subscription.enabled()
+    await db.set_setting("sub_check", "0" if current else "1")
+    subscription.clear_cache()
+    await call.answer("Подписка " + ("выключена" if current else "включена"))
+    tech = await db.get_setting("tech_work", "0")
+    await call.message.edit_text(await settings_text(),
+                                 reply_markup=await addin.admin_settings_kb(
+                                     tech, payments.enabled(),
+                                     await db.get_setting("require_agreement", "1"),
+                                     await subscription.enabled(), await subscription.channel()))
+
+
+@router.callback_query(F.data == "adm:settings:subch")
+async def set_sub_channel1(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    await call.message.edit_text(
+        "Отправьте канал для обязательной подписки: <code>@username</code> или ссылку "
+        "<code>https://t.me/username</code>.\n"
+        "Бот должен быть администратором канала, иначе проверка не работает.\n"
+        "Отправьте <code>-</code> для отмены."
+    )
+    await state.set_state(Adm.s_subchannel)
+
+
+@router.message(Adm.s_subchannel)
+async def set_sub_channel2(msg: Message, state: FSMContext):
+    if not is_adm(msg.from_user.id):
+        return await state.clear()
+    raw = (msg.text or "").strip()
+    if raw == "-":
+        await state.clear()
+        return await msg.answer("Отменено.", reply_markup=await addin.admin_main_kb())
+
+    channel = raw
+    for prefix in ("https://t.me/", "http://t.me/", "t.me/"):
+        if channel.startswith(prefix):
+            channel = "@" + channel[len(prefix):].strip("/")
+            break
+    if not channel:
+        return await msg.answer("Не понял канал, отправьте @username или ссылку.")
+    if not channel.startswith("@") and not channel.lstrip("-").isdigit():
+        channel = "@" + channel
+
+    await db.set_setting("sub_channel", channel)
+    if channel.startswith("@"):
+        await db.set_setting("sub_url", f"https://t.me/{channel[1:]}")
+    subscription.clear_cache()
+    await state.clear()
+
+    problem = await subscription.diagnose(msg.bot)
+    note = f"\n\n⚠️ Проверка пока недоступна: {html.escape(str(problem))}" if problem else "\n\nПроверка работает."
+    await msg.answer(f"Канал подписки: <b>{html.escape(channel)}</b>{note}",
+                     reply_markup=await addin.admin_main_kb())
 
 
 @router.callback_query(F.data == "adm:settings:amounts")
@@ -880,6 +947,7 @@ BUTTON_SCREENS = [
     ("choose_payment", "Выбор способа оплаты"),
     ("cashera_pay", "Оплата через Cashera"),
     ("cashera_expired", "Ссылка Cashera истекла"),
+    ("subscribe", "Подписка на канал"),
     ("crypto_pay", "Оплата криптой"),
     ("crypto_expired", "Счёт истёк"),
     ("announce", "Анонс пополнения товара"),

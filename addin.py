@@ -169,15 +169,22 @@ async def admin_design_kb() -> InlineKeyboardMarkup:
     return await kb("adm_design")
 
 
-async def admin_settings_kb(tech_work: str, pay_enabled: bool, agreement: str = "1") -> InlineKeyboardMarkup:
+async def admin_settings_kb(tech_work: str, pay_enabled: bool, agreement: str = "1",
+                            sub_enabled: bool = False, sub_channel: str = "") -> InlineKeyboardMarkup:
     kb_obj = await kb("adm_settings")
     status = "🟢 ВЫКЛ" if tech_work == "0" else "🔴 ВКЛ"
     agree_status = "🟢 ВКЛ" if agreement == "1" else "🔴 ВЫКЛ"
+    sub_status = "🟢 ВКЛ" if sub_enabled else "🔴 ВЫКЛ"
     for row in kb_obj.inline_keyboard:
         for b in row:
             if b.callback_data == "adm:settings:tech":
                 b.text = f"Тех. работы: {status}"
                 b.style = "danger" if tech_work == "1" else "success"
+            elif b.callback_data == "adm:settings:sub":
+                b.text = f"Подписка на канал: {sub_status}"
+                b.style = "success" if sub_enabled else "danger"
+            elif b.callback_data == "adm:settings:subch":
+                b.text = f"Канал подписки: {sub_channel or '—'}"
             elif b.callback_data == "adm:settings:agree":
                 b.text = f"Согласие при старте: {agree_status}"
                 b.style = "success" if agreement == "1" else "danger"

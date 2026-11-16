@@ -25,6 +25,7 @@ import addin
 import database as db
 import payments
 import payments_cashera as cashera
+import subscription
 import webhook
 
 logger = logging.getLogger(__name__)
@@ -98,6 +99,21 @@ async def deposit_presets():
     return [int(x) for x in raw.replace(" ", "").split(",") if x.isdigit()]
 
 
+async def send_subscribe(event):
+    """Показывает экран обязательной подписки (для Message или CallbackQuery)."""
+    text = await db.get_setting("sub_text")
+    url = await db.get_setting("sub_url", "https://t.me/anthropc_claude")
+    kb = await addin.kb("subscribe", {"url": url})
+    photo = await db.get_setting("sub_photo")
+    if isinstance(event, CallbackQuery):
+        await event.answer()
+        await show(event, text, kb, photo)
+    elif photo:
+        await event.answer_photo(photo=photo, caption=text, reply_markup=kb)
+    else:
+        await event.answer(text, reply_markup=kb)
+
+
 class AccessMiddleware(BaseMiddleware):
     """Отсекает забаненных и держит технические работы, не пуская их в хендлеры."""
 
@@ -119,6 +135,13 @@ class AccessMiddleware(BaseMiddleware):
                 else:
                     await event.answer("Доступ ограничен.")
                 return
+
+            if await subscription.enabled():
+                bypass = is_call and event.data == "sub:check"
+                agreed = bool(db_user and db_user.get('terms_accepted')) or not await _agreement_required()
+                if not bypass and agreed:
+                    if not await subscription.is_subscribed(data["bot"], user.id):
+                        return await send_subscribe(event)
         return await handler(event, data)
 
 
@@ -175,11 +198,28 @@ async def show_start(message: Message):
         await message.answer(text, reply_markup=kb)
 
 
+@router.callback_query(F.data == "sub:check")
+async def check_subscription(call: CallbackQuery, bot: Bot):
+    ok = await subscription.is_subscribed(bot, call.from_user.id, force=True)
+    if not ok:
+        return await call.answer("Подписка не найдена. Подпишитесь на канал и нажмите «Проверить» ещё раз.",
+                                 show_alert=True)
+    await call.answer("Подписка подтверждена")
+    user = await db.get_user(call.from_user.id)
+    if await _agreement_required() and not (user or {}).get('terms_accepted'):
+        return await show_agreement(call)
+    text = await fill("start_text", name=html.escape(call.from_user.first_name or "друг"),
+                      balance=user['balance'] if user else 0)
+    await show(call, text, await addin.main_menu_kb(), await db.get_setting("start_photo"))
+
+
 @router.callback_query(F.data == "agree:accept")
-async def accept_agreement(call: CallbackQuery, state: FSMContext):
+async def accept_agreement(call: CallbackQuery, state: FSMContext, bot: Bot):
     await db.accept_terms(call.from_user.id)
     await state.clear()
     await call.answer("Условия приняты")
+    if await subscription.enabled() and not await subscription.is_subscribed(bot, call.from_user.id):
+        return await send_subscribe(call)
     user = await db.get_user(call.from_user.id)
     text = await fill("start_text", name=html.escape(call.from_user.first_name or "друг"),
                       balance=user['balance'] if user else 0)
@@ -733,6 +773,12 @@ async def main():
     me = await bot.get_me()
     BOT_USERNAME = me.username
     logger.info("Бот запущен как @%s", BOT_USERNAME)
+
+    if await subscription.enabled():
+        problem = await subscription.diagnose(bot)
+        if problem:
+            logger.error("Подписка: проверка недоступна — %s", problem)
+            await notify_admins(bot, f"⚠️ Проверка подписки не работает: {html.escape(str(problem))}")
 
     dp = Dispatcher(storage=MemoryStorage())
     dp.message.outer_middleware(AccessMiddleware())
