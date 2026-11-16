@@ -2,8 +2,12 @@ import asyncpg
 import os
 import logging
 from typing import Optional, Dict, Any, List
+from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
+
+# ИСПРАВЛЕНО: загружаем .env до чтения DATABASE_URL
+load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
@@ -60,8 +64,9 @@ async def init_db():
             ("shop_photo", ""),
             ("tech_work", "0")
         ]
+        # ИСПРАВЛЕНО: DO NOTHING вместо DO UPDATE — правки из админки больше не затираются при рестарте
         for k, v in default_settings:
-            await conn.execute("INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", k, v)
+            await conn.execute("INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING", k, v)
         
         # ИСПРАВЛЕНО: Из дефолтных кнопок убран 'back'
         default_buttons = [
@@ -76,13 +81,12 @@ async def init_db():
             ('profile', 'ref', 'Рефералка', 'profile:referral', None, 'primary', '5429256253224299845', 3, 1),
             ('shop', 'api', 'API-ключи', 'shop:catalog', None, 'success', '5427112068111184025', 1, 1)
         ]
+        # ИСПРАВЛЕНО: DO NOTHING — правки кнопок (текст, эмодзи, стиль) переживают рестарт
         for b in default_buttons:
             await conn.execute("""
                 INSERT INTO buttons (screen, button_key, text, callback_data, url, style, emoji_id, row_num, position) 
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                ON CONFLICT (button_key) DO UPDATE SET 
-                text = EXCLUDED.text, callback_data = EXCLUDED.callback_data, url = EXCLUDED.url, 
-                style = EXCLUDED.style, emoji_id = EXCLUDED.emoji_id, row_num = EXCLUDED.row_num, position = EXCLUDED.position
+                ON CONFLICT (button_key) DO NOTHING
             """, *b)
 
 async def get_setting(key: str, default: str = "") -> str:

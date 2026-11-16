@@ -1,15 +1,22 @@
 import asyncio
 import logging
 import os
+import sys
+from dotenv import load_dotenv
+
+# ИСПРАВЛЕНО: .env читается ДО импорта database/admin,
+# иначе DATABASE_URL и ADMIN_IDS берутся из пустого окружения.
+load_dotenv()
+
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart
 from aiogram.types import Message, CallbackQuery
-from dotenv import load_dotenv
+
 import admin, addin, database as db
 
-load_dotenv()
+logger = logging.getLogger(__name__)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()]
 
@@ -83,5 +90,12 @@ async def main():
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    try: asyncio.run(main())
-    except: pass
+    logging.basicConfig(level=logging.INFO)
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
+    except Exception:
+        # ИСПРАВЛЕНО: раньше здесь стояло "except: pass" и бот молча умирал без логов
+        logger.exception("Критическая ошибка, бот остановлен")
+        sys.exit(1)

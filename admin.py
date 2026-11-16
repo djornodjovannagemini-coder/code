@@ -1,6 +1,8 @@
 import asyncio
 import os
 import logging
+from dotenv import load_dotenv
+
 from aiogram import Router, F, Bot
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -13,6 +15,9 @@ import addin
 
 logger = logging.getLogger(__name__)
 
+# ИСПРАВЛЕНО: .env читается до ADMIN_IDS, иначе админы не определяются
+load_dotenv()
+
 raw_ids = os.getenv("ADMIN_IDS", "")
 ADMIN_IDS = [int(x.strip()) for x in raw_ids.split(",") if x.strip().isdigit()]
 logger.info(f"🔑 Загруженные ID админов: {ADMIN_IDS}")
@@ -20,6 +25,47 @@ logger.info(f"🔑 Загруженные ID админов: {ADMIN_IDS}")
 router = Router()
 
 def is_adm(uid): return uid in ADMIN_IDS
+
+
+def _utf16_to_idx(text: str, units: int) -> int:
+    """Переводит UTF-16 смещение из Telegram в индекс Python-строки.
+
+    Telegram считает offset/length в UTF-16, а эмодзи там занимает 2 единицы,
+    поэтому обычная нарезка text[offset:offset+length] съезжает на любом эмодзи.
+    """
+    if units <= 0:
+        return 0
+    seen = 0
+    for i, ch in enumerate(text):
+        if seen >= units:
+            return i
+        seen += 2 if ord(ch) > 0xFFFF else 1
+    return len(text)
+
+
+def apply_custom_emoji(text: str, entities) -> str:
+    """Оборачивает кастомные эмодзи в <tg-emoji ...>, сохраняя абсолютно все.
+
+    Замены идут справа налево, чтобы смещения оставались валидными,
+    и по индексам, а не через replace() — повторяющиеся эмодзи не путаются.
+    """
+    if not text or not entities:
+        return text
+
+    spans = []
+    for e in entities:
+        if e.type != "custom_emoji" or not getattr(e, "custom_emoji_id", None):
+            continue
+        start = _utf16_to_idx(text, e.offset)
+        end = _utf16_to_idx(text, e.offset + e.length)
+        if end > start:
+            spans.append((start, end, e.custom_emoji_id))
+
+    for start, end, emoji_id in sorted(spans, key=lambda s: s[0], reverse=True):
+        chunk = text[start:end]
+        text = f'{text[:start]}<tg-emoji emoji-id="{emoji_id}">{chunk}</tg-emoji>{text[end:]}'
+    return text
+
 
 class Adm(StatesGroup):
     # Товары
@@ -212,12 +258,15 @@ async def process_new_text(msg: Message, state: FSMContext):
     if msg.text == "-":
         await msg.answer("Текст оставлен без изменений.")
     else:
-        new_text = msg.text or msg.caption or ""
-        if msg.entities:
-            for entity in msg.entities:
-                if entity.type == "custom_emoji":
-                    emoji_char = new_text[entity.offset:entity.offset + entity.length]
-                    new_text = new_text.replace(emoji_char, f'<tg-emoji emoji-id="{entity.custom_emoji_id}">{emoji_char}</tg-emoji>', 1)
+        # ИСПРАВЛЕНО: кастомные эмодзи сохраняются все, в том числе в подписях к фото
+        if msg.text is not None:
+            new_text, entities = msg.text, msg.entities or []
+        elif msg.caption is not None:
+            new_text, entities = msg.caption, msg.caption_entities or []
+        else:
+            return await msg.answer("❌ Отправьте текст или фото с подписью.")
+
+        new_text = apply_custom_emoji(new_text, entities)
         await db.set_setting(f"{screen}_text", new_text)
         await msg.answer("✅ Текст обновлен!")
         
