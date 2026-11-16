@@ -191,7 +191,8 @@ async def design_screen(call: CallbackQuery):
     kb = InlineKeyboardBuilder()
     kb.button(text="📝 Текст экрана", callback_data=f"adm:ed:t:{screen}", style="primary")
     kb.button(text="🖼 Картинка", callback_data=f"adm:ed:p:{screen}", style="primary")
-    kb.button(text="⬅️ Назад", callback_data="adm:design", style="danger")
+    # ИСПРАВЛЕНО: Убран ⬅️
+    kb.button(text="Назад", callback_data="adm:design", style="danger")
     kb.adjust(1, 1, 1)
     await call.message.edit_text(f"Настройка экрана <b>{screen}</b>:", reply_markup=kb.as_markup())
 
@@ -221,7 +222,8 @@ async def process_new_text(msg: Message, state: FSMContext):
         await msg.answer("✅ Текст обновлен!")
         
     kb = InlineKeyboardBuilder()
-    kb.button(text="⬅️ Назад", callback_data="adm:design", style="danger")
+    # ИСПРАВЛЕНО
+    kb.button(text="Назад", callback_data="adm:design", style="danger")
     await msg.answer("Вернуться в меню?", reply_markup=kb.as_markup())
     await state.clear()
 
@@ -249,7 +251,8 @@ async def process_new_photo(msg: Message, state: FSMContext):
         return
         
     kb = InlineKeyboardBuilder()
-    kb.button(text="⬅️ Назад", callback_data="adm:design", style="danger")
+    # ИСПРАВЛЕНО
+    kb.button(text="Назад", callback_data="adm:design", style="danger")
     await msg.answer("Вернуться в меню?", reply_markup=kb.as_markup())
     await state.clear()
 
