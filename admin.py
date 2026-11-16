@@ -37,6 +37,45 @@ def is_adm(uid):
     return uid in ADMIN_IDS
 
 
+def _emo(emoji_id: str, char: str) -> str:
+    return f'<tg-emoji emoji-id="{emoji_id}">{char}</tg-emoji>'
+
+
+def _money(amount) -> str:
+    return f"{int(amount):,}".replace(",", " ")
+
+
+async def announce_product(bot: Bot, product_id: int, added: int, report_to: int) -> None:
+    """Рассылает анонс пополнения всем активным юзерам и отчитывается админу."""
+    product = await db.get_product(product_id)
+    if not product or not product['is_active'] or added <= 0:
+        return
+    stock = await db.get_product_stock(product_id)
+    text = (
+        f"{_emo(addin.STOCK_EMOJI, '📦')} <b>Пополнение товара!</b>\n"
+        f"<b>━━━━━━━━━━━━━</b>\n"
+        f"{_emo(addin.PRODUCT_EMOJI, '🛍')} <b>{html.escape(product['name'])}</b>\n"
+        f"• Добавлено: <b>{added} шт.</b>\n"
+        f"• Доступно сейчас: <b>{stock} шт.</b>\n"
+        f"• Цена: <b>{_money(product['price'])} ₽</b>"
+    )
+    kb = addin.product_link_kb(product_id)
+    users = await db.get_all_users_ids()
+    sent, failed = 0, 0
+    for uid in users:
+        try:
+            await bot.send_message(uid, text, reply_markup=kb)
+            sent += 1
+        except Exception as e:
+            failed += 1
+            logger.debug("Анонс товара %s: не доставлено %s (%s)", product_id, uid, e)
+        await asyncio.sleep(0.05)
+    try:
+        await bot.send_message(report_to, f"Анонс «{html.escape(product['name'])}»: доставлено {sent}, ошибок {failed}")
+    except Exception:
+        logger.warning("Не удалось отправить отчёт об анонсе админу %s", report_to)
+
+
 def _utf16_to_idx(text: str, units: int) -> int:
     """Переводит UTF-16 смещение из Telegram в индекс Python-строки.
 
@@ -186,7 +225,7 @@ async def add_p5(call: CallbackQuery, state: FSMContext):
 
 
 @router.message(Adm.p_items)
-async def add_p6(msg: Message, state: FSMContext):
+async def add_p6(msg: Message, state: FSMContext, bot: Bot):
     if not is_adm(msg.from_user.id):
         return await state.clear()
     data = await state.get_data()
@@ -199,9 +238,10 @@ async def add_p6(msg: Message, state: FSMContext):
 
     pid = await db.add_product(data['name'], data['desc'], data['price'], data['type'])
     count = await db.add_product_items(pid, items)
-    await msg.answer(f"✅ Товар <b>{html.escape(data['name'])}</b> добавлен! ({count} шт.)",
-                     reply_markup=addin.admin_main_kb())
     await state.clear()
+    await msg.answer(f"Товар <b>{html.escape(data['name'])}</b> добавлен! ({count} шт.)",
+                     reply_markup=addin.admin_main_kb())
+    asyncio.create_task(announce_product(bot, pid, count, msg.chat.id))
 
 
 @router.callback_query(F.data == "adm:prod:toggle")
@@ -273,7 +313,7 @@ async def prod_stock_pick(call: CallbackQuery, state: FSMContext):
 
 
 @router.message(Adm.p_stock_items)
-async def prod_stock_add(msg: Message, state: FSMContext):
+async def prod_stock_add(msg: Message, state: FSMContext, bot: Bot):
     if not is_adm(msg.from_user.id):
         return await state.clear()
     data = await state.get_data()
@@ -286,8 +326,9 @@ async def prod_stock_add(msg: Message, state: FSMContext):
     count = await db.add_product_items(data['product_id'], items)
     stock = await db.get_product_stock(data['product_id'])
     await state.clear()
-    await msg.answer(f"✅ Добавлено {count} шт. Всего в наличии: {stock}.",
+    await msg.answer(f"Добавлено {count} шт. Всего в наличии: {stock}.",
                      reply_markup=addin.admin_main_kb())
+    asyncio.create_task(announce_product(bot, data['product_id'], count, msg.chat.id))
 
 
 # ================= 2. ЮЗЕРЫ =================

@@ -15,6 +15,8 @@ DEPOSIT_EMOJI = "5429098361636560179"
 CRYPTO_EMOJI = "5361836987642815474"
 ADMIN_PAY_EMOJI = "5426948678965307932"
 VERIFY_EMOJI = "5427398138702899667"
+STOCK_EMOJI = "5429154960715588692"
+PRODUCT_EMOJI = "5429250347644262814"
 
 
 def btn(text: str, callback_data: str = None, url: str = None, style: str = "primary",
@@ -124,6 +126,12 @@ def product_kb(product_id: int, can_buy: bool) -> InlineKeyboardMarkup:
     if can_buy:
         kb.row(btn("Купить", f"buy:{product_id}", style="success", emoji=MONEY_EMOJI))
     kb.row(back_btn("menu:shop"))
+    return kb.as_markup()
+
+
+def product_link_kb(product_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(btn("Перейти к товару", f"shop:item:{product_id}", style="success", emoji=PURCHASES_EMOJI))
     return kb.as_markup()
 
 
