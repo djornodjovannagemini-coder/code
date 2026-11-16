@@ -1,4 +1,6 @@
-import asyncio, logging, os
+import asyncio
+import logging
+import os
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
@@ -9,11 +11,13 @@ import admin, addin, database as db
 
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()]
+
 router = Router()
 
 @router.message(CommandStart())
 async def cmd_start(message: Message):
-    if await db.get_setting("tech_work") == "1" and message.from_user.id not in [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.isdigit()]:
+    if await db.get_setting("tech_work") == "1" and message.from_user.id not in ADMIN_IDS:
         return await message.answer("🛠 Бот на технических работах. Зайдите позже.")
     await db.register_user(message.from_user.id, message.from_user.first_name, message.from_user.username)
     user = await db.get_user(message.from_user.id)
@@ -28,9 +32,13 @@ async def cmd_start(message: Message):
 async def show_profile(call: CallbackQuery):
     user = await db.get_user(call.from_user.id)
     if not user: return await call.answer("Напишите /start", show_alert=True)
+    
     text = await db.get_setting("profile_text")
     text = text.replace("{name}", user['first_name']).replace("{balance}", str(user['balance']))
     text = text.replace("{spent}", str(user['total_spent'])).replace("{purchases}", str(user['purchases_count'])).replace("{user_id}", str(user['user_id']))
+    # ИСПРАВЛЕНО: Добавлена замена рефералов, чтобы не висели скобки
+    text = text.replace("{refs}", "0").replace("{ref_earned}", "0")
+    
     photo = await db.get_setting("profile_photo")
     kb = await addin.profile_kb()
     try:
@@ -43,9 +51,10 @@ async def show_profile(call: CallbackQuery):
 
 @router.callback_query(F.data == "menu:shop")
 async def show_shop(call: CallbackQuery):
+    text = await db.get_setting("shop_text")
     kb = await addin.shop_menu_kb()
-    try: await call.message.edit_text("🛍 <b>Магазин</b>\nВыберите раздел:", reply_markup=kb)
-    except: await call.message.answer("🛍 <b>Магазин</b>", reply_markup=kb)
+    try: await call.message.edit_text(text, reply_markup=kb)
+    except: await call.message.answer(text, reply_markup=kb)
     await call.answer()
 
 @router.callback_query(F.data == "menu:back")
@@ -62,8 +71,6 @@ async def back_to_main(call: CallbackQuery):
         if photo: await call.message.answer_photo(photo=photo, caption=text, reply_markup=kb)
         else: await call.message.answer(text, reply_markup=kb)
     await call.answer()
-
-# ... (остальные хэндлеры покупки, депозита и т.д. остаются, просто вызывают asyncpg функции) ...
 
 async def main():
     logging.basicConfig(level=logging.INFO)
