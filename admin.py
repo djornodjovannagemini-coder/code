@@ -14,25 +14,20 @@ import addin
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()]
 router = Router()
 
-# ================= СОСТОЯНИЯ FSM =================
 class AdminStates(StatesGroup):
-    # Товары
     add_prod_name = State()
     add_prod_desc = State()
     add_prod_price = State()
     add_prod_keys = State()
     ask_broadcast_stock = State()
-    
-    # Рассылка
     broadcast_msg = State()
-    
-    # Оформление
     edit_screen_text = State()
     edit_screen_photo = State()
-    
-    # Пользователи
     user_balance_id = State()
     user_balance_amount = State()
+
+def is_admin(user_id: int) -> bool:
+    return user_id in ADMIN_IDS
 
 # ================= ГЛАВНОЕ МЕНЮ АДМИНКИ =================
 
@@ -48,17 +43,19 @@ def admin_main_kb() -> InlineKeyboardMarkup:
 
 @router.message(Command("admin"))
 async def cmd_admin(message: Message):
-    if message.from_user.id not in ADMIN_IDS: return
+    if not is_admin(message.from_user.id):
+        return await message.answer("⛔ У вас нет доступа к админке.\nВаш ID: " + str(message.from_user.id))
     await message.answer("🔧 <b>Админ-панель</b>\nВыберите раздел:", reply_markup=admin_main_kb())
 
 @router.callback_query(F.data == "admin:menu")
 async def admin_menu(call: CallbackQuery):
-    if call.from_user.id not in ADMIN_IDS: return
+    await call.answer()
+    if not is_admin(call.from_user.id): 
+        return
     try:
         await call.message.edit_caption(caption="🔧 <b>Админ-панель</b>\nВыберите раздел:", reply_markup=admin_main_kb())
     except Exception:
         await call.message.edit_text(text="🔧 <b>Админ-панель</b>\nВыберите раздел:", reply_markup=admin_main_kb())
-    await call.answer()
 
 # ================= УПРАВЛЕНИЕ ТОВАРАМИ =================
 
@@ -71,16 +68,18 @@ def admin_products_kb() -> InlineKeyboardMarkup:
 
 @router.callback_query(F.data == "admin:products")
 async def admin_products(call: CallbackQuery):
-    if call.from_user.id not in ADMIN_IDS: return
-    await call.message.edit_text("📦 <b>Управление товарами</b>", reply_markup=admin_products_kb())
     await call.answer()
+    if not is_admin(call.from_user.id): 
+        return
+    await call.message.edit_text("📦 <b>Управление товарами</b>", reply_markup=admin_products_kb())
 
 @router.callback_query(F.data == "admin:add_prod")
 async def start_add_prod(call: CallbackQuery, state: FSMContext):
-    if call.from_user.id not in ADMIN_IDS: return
+    await call.answer()
+    if not is_admin(call.from_user.id): 
+        return
     await call.message.edit_text("1️⃣ Введите название товара (например: Claude 3 Opus):")
     await state.set_state(AdminStates.add_prod_name)
-    await call.answer()
 
 @router.message(AdminStates.add_prod_name)
 async def process_prod_name(message: Message, state: FSMContext):
@@ -127,6 +126,9 @@ async def process_prod_keys(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "admin:broadcast_stock")
 async def do_stock_broadcast(call: CallbackQuery, state: FSMContext):
+    await call.answer()
+    if not is_admin(call.from_user.id): 
+        return
     data = await state.get_data()
     product = await db.get_product(data['product_id'])
     stock = await db.get_product_stock(data['product_id'])
@@ -134,7 +136,6 @@ async def do_stock_broadcast(call: CallbackQuery, state: FSMContext):
     
     await call.message.edit_text("⏳ Начинаю рассылку...")
     
-    # Вызываем функцию из addin.py
     await addin.broadcast_stock_update(
         bot=call.bot, users=users, product_id=data['product_id'],
         product_name=product['name'], added_qty=data['added_qty'],
@@ -143,7 +144,6 @@ async def do_stock_broadcast(call: CallbackQuery, state: FSMContext):
     
     await call.message.edit_text("✅ Рассылка завершена!", reply_markup=admin_main_kb())
     await state.clear()
-    await call.answer()
 
 # ================= ОФОРМЛЕНИЕ ЭКРАНОВ =================
 
@@ -158,23 +158,35 @@ def admin_design_kb() -> InlineKeyboardMarkup:
 
 @router.callback_query(F.data == "admin:design")
 async def admin_design(call: CallbackQuery):
-    if call.from_user.id not in ADMIN_IDS: return
-    await call.message.edit_text("🎨 <b>Оформление экранов</b>\nВыберите экран для редактирования:", reply_markup=admin_design_kb())
     await call.answer()
+    if not is_admin(call.from_user.id): 
+        return
+    await call.message.edit_text("🎨 <b>Оформление экранов</b>\nВыберите экран для редактирования:", reply_markup=admin_design_kb())
 
-@router.callback_query(F.data.startswith("admin:edit_"))
+# Обрати внимание: фильтр "admin:edit" без подчеркивания в конце
+@router.callback_query(F.data.startswith("admin:edit"))
 async def start_edit_screen(call: CallbackQuery, state: FSMContext):
-    if call.from_user.id not in ADMIN_IDS: return
-    screen = call.data.split("_")[1]
+    await call.answer()
+    if not is_admin(call.from_user.id): 
+        return
+    
+    # Безопасное извлечение: удаляем "admin:edit_" или "admin:edit"
+    screen = call.data.replace("admin:edit_", "").replace("admin:edit", "")
+    
     await state.update_data(screen=screen)
     
-    await call.message.edit_text(
+    text = (
         f"Редактирование экрана <b>{screen}</b>.\n\n"
         f"1️⃣ Отправьте новый текст (HTML и <tg-emoji> поддерживаются).\n"
         f"Если хотите оставить текущий текст, отправьте <code>-</code>."
     )
+    
+    try:
+        await call.message.edit_text(text)
+    except Exception:
+        await call.message.answer(text)
+        
     await state.set_state(AdminStates.edit_screen_text)
-    await call.answer()
 
 @router.message(AdminStates.edit_screen_text)
 async def process_screen_text(message: Message, state: FSMContext):
@@ -221,16 +233,18 @@ def admin_broadcast_kb() -> InlineKeyboardMarkup:
 
 @router.callback_query(F.data == "admin:broadcast")
 async def admin_broadcast(call: CallbackQuery):
-    if call.from_user.id not in ADMIN_IDS: return
-    await call.message.edit_text("📢 <b>Ручная рассылка</b>\nОтправьте текст, который нужно разослать всем пользователям:", reply_markup=admin_broadcast_kb())
     await call.answer()
+    if not is_admin(call.from_user.id): 
+        return
+    await call.message.edit_text("📢 <b>Ручная рассылка</b>\nОтправьте текст, который нужно разослать всем пользователям:", reply_markup=admin_broadcast_kb())
 
 @router.callback_query(F.data == "admin:do_broadcast")
 async def start_broadcast(call: CallbackQuery, state: FSMContext):
-    if call.from_user.id not in ADMIN_IDS: return
+    await call.answer()
+    if not is_admin(call.from_user.id): 
+        return
     await call.message.edit_text("Отправьте сообщение для рассылки (можно с картинкой):")
     await state.set_state(AdminStates.broadcast_msg)
-    await call.answer()
 
 @router.message(AdminStates.broadcast_msg)
 async def process_broadcast(message: Message, state: FSMContext, bot: Bot):
@@ -256,10 +270,11 @@ async def process_broadcast(message: Message, state: FSMContext, bot: Bot):
 
 @router.callback_query(F.data == "admin:users")
 async def admin_users(call: CallbackQuery, state: FSMContext):
-    if call.from_user.id not in ADMIN_IDS: return
+    await call.answer()
+    if not is_admin(call.from_user.id): 
+        return
     await call.message.edit_text("👥 Введите ID пользователя, которому нужно изменить баланс:")
     await state.set_state(AdminStates.user_balance_id)
-    await call.answer()
 
 @router.message(AdminStates.user_balance_id)
 async def process_user_id(message: Message, state: FSMContext):
@@ -282,7 +297,6 @@ async def process_user_balance(message: Message, state: FSMContext):
     data = await state.get_data()
     user_id = data['target_user']
     
-    # Прямое обновление БД
     import aiosqlite
     async with aiosqlite.connect(db.DB_PATH) as conn:
         await conn.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
