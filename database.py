@@ -5,19 +5,14 @@ from typing import Optional, Dict, Any, List
 
 logger = logging.getLogger(__name__)
 
-# Получаем URL базы данных из переменных окружения Railway
 DATABASE_URL = os.getenv("DATABASE_URL")
-
 if not DATABASE_URL:
     raise ValueError("❌ КРИТИЧЕСКАЯ ОШИБКА: DATABASE_URL не задан в Variables!")
 
-# Railway иногда выдает postgres:// вместо postgresql://
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-# Для внутренних подключений Railway (postgres.railway.internal) SSL не требуется
 use_ssl = "railway.internal" not in DATABASE_URL
-
 _pool: Optional[asyncpg.Pool] = None
 
 async def get_pool() -> asyncpg.Pool:
@@ -35,89 +30,67 @@ async def get_pool() -> asyncpg.Pool:
 async def init_db():
     pool = await get_pool()
     async with pool.acquire() as conn:
-        # Создание таблиц
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
-                user_id BIGINT PRIMARY KEY,
-                first_name TEXT,
-                username TEXT,
-                balance BIGINT DEFAULT 0,
-                total_spent BIGINT DEFAULT 0,
-                purchases_count INTEGER DEFAULT 0,
-                is_banned INTEGER DEFAULT 0,
-                reg_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                user_id BIGINT PRIMARY KEY, first_name TEXT, username TEXT,
+                balance BIGINT DEFAULT 0, total_spent BIGINT DEFAULT 0, purchases_count INTEGER DEFAULT 0,
+                is_banned INTEGER DEFAULT 0, reg_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT
-            );
+            CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
             CREATE TABLE IF NOT EXISTS products (
-                id SERIAL PRIMARY KEY,
-                name TEXT,
-                description TEXT,
-                price BIGINT,
-                item_type TEXT DEFAULT 'text',
-                is_active INTEGER DEFAULT 1
+                id SERIAL PRIMARY KEY, name TEXT, description TEXT, price BIGINT, item_type TEXT DEFAULT 'text', is_active INTEGER DEFAULT 1
             );
             CREATE TABLE IF NOT EXISTS product_items (
-                id SERIAL PRIMARY KEY,
-                product_id INTEGER REFERENCES products(id) ON DELETE CASCADE,
-                content TEXT,
-                is_sold INTEGER DEFAULT 0,
-                sold_to BIGINT,
-                sold_date TIMESTAMP
+                id SERIAL PRIMARY KEY, product_id INTEGER REFERENCES products(id) ON DELETE CASCADE,
+                content TEXT, is_sold INTEGER DEFAULT 0, sold_to BIGINT, sold_date TIMESTAMP
             );
             CREATE TABLE IF NOT EXISTS orders (
-                id SERIAL PRIMARY KEY,
-                user_id BIGINT,
-                product_id INTEGER,
-                price BIGINT,
-                order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                id SERIAL PRIMARY KEY, user_id BIGINT, product_id INTEGER, price BIGINT, order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
-            CREATE TABLE IF NOT EXISTS promocodes (
-                code TEXT PRIMARY KEY,
-                discount INTEGER,
-                uses_left INTEGER
-            );
+            CREATE TABLE IF NOT EXISTS promocodes (code TEXT PRIMARY KEY, discount INTEGER, uses_left INTEGER);
             CREATE TABLE IF NOT EXISTS buttons (
-                id SERIAL PRIMARY KEY,
-                screen TEXT,
-                button_key TEXT UNIQUE,
-                text TEXT,
-                callback_data TEXT,
-                url TEXT,
-                style TEXT DEFAULT 'primary',
-                emoji_id TEXT,
-                row_num INTEGER,
-                position INTEGER,
-                is_active INTEGER DEFAULT 1
+                id SERIAL PRIMARY KEY, screen TEXT, button_key TEXT UNIQUE, text TEXT,
+                callback_data TEXT, url TEXT, style TEXT DEFAULT 'primary', emoji_id TEXT,
+                row_num INTEGER, position INTEGER, is_active INTEGER DEFAULT 1
             );
         """)
         
-        # Базовые настройки экранов
+        # 1. ВОЗВРАЩАЕМ ТЕКСТЫ С ПРЕМИУМ-ЭМОДЗИ (Принудительное обновление)
         default_settings = [
-            ("start_text", "Claude AI Store\n<tg-emoji emoji-id=\"5193119436621494267\">🏠</tg-emoji> Главное меню\n<b>━━━━━━━━━━━━━</b>\n\n👋 С возвращением, <b>{name}</b>.\n💰 Баланс: <b>{balance} ₽</b>\n\nРазные продукты · API-ключи · Приватные сообщества"),
+            ("start_text", "Claude AI Store\n<tg-emoji emoji-id=\"5193119436621494267\">🏠</tg-emoji> Главное меню\n<b>━━━━━━━━━━━━━</b>\n\n<tg-emoji emoji-id=\"5458904472598095631\">👋</tg-emoji> С возвращением, <b>{name}</b>.\n<tg-emoji emoji-id=\"5769126056262898415\">💰</tg-emoji> Баланс: <b>{balance} ₽</b>\n\nРазные продукты · API-ключи · Приватные сообщества"),
             ("start_photo", ""),
-            ("profile_text", "👤 Профиль\n<b>━━━━━━━━━━━━━</b>\n\n💰 Баланс: <b>{balance} ₽</b>\n🛍 Всего потрачено: <b>{spent} ₽</b>\n🛒 Покупок: <b>{purchases}</b>\n🆔 Ваш ID: <b>{user_id}</b>"),
+            ("profile_text", "Claude AI Store\n<tg-emoji emoji-id=\"5429519697928301269\">👤</tg-emoji> Профиль\n<b>━━━━━━━━━━━━━</b>\n\n<tg-emoji emoji-id=\"5258204546391351475\">💰</tg-emoji> Баланс: <b>{balance} ₽</b>\n<tg-emoji emoji-id=\"5429154960715588692\">🛍️</tg-emoji> Всего потрачено: <b>{spent} ₽</b>\n<tg-emoji emoji-id=\"5429412504134525920\">🛒</tg-emoji> Покупок: <b>{purchases}</b>\n<tg-emoji emoji-id=\"5429256253224299845\">🔗</tg-emoji> Рефералов: <b>{refs} · заработано {ref_earned} ₽</b>\n\n<tg-emoji emoji-id=\"5427321817134051632\">🆔</tg-emoji> Ваш ID: <b>{user_id}</b>"),
             ("profile_photo", ""),
-            ("shop_text", "🛍 <b>Магазин</b>\nВыберите раздел:"),
+            ("shop_text", "Claude AI Store\n<tg-emoji emoji-id=\"5348475279960456198\">🛍</tg-emoji> Магазин\n<b>━━━━━━━━━━━━━</b>\n\nВыберите категорию:"),
             ("shop_photo", ""),
             ("tech_work", "0")
         ]
         for k, v in default_settings:
-            await conn.execute("INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING", k, v)
+            await conn.execute("INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", k, v)
         
-        # Дефолтные кнопки для главного меню
-        await conn.execute("""
-            INSERT INTO buttons (screen, button_key, text, callback_data, url, style, emoji_id, row_num, position) 
-            VALUES 
-            ('main', 'profile', 'Профиль', 'menu:profile', NULL, 'primary', '6032693626394382504', 1, 1),
-            ('main', 'shop', 'Магазин', 'menu:shop', NULL, 'primary', '5348475279960456198', 1, 2),
-            ('main', 'info', 'Информация', 'menu:info', NULL, 'success', '5348507247402040764', 2, 1),
-            ('main', 'channel', 'Канал', NULL, 'https://t.me/anthropc_claude', 'success', '5260268501515377807', 2, 2),
-            ('main', 'support', 'Поддержка', NULL, 'https://t.me/cxepy', 'danger', '5258513401784573443', 3, 1)
-            ON CONFLICT (button_key) DO NOTHING
-        """)
+        # 2. ВОЗВРАЩАЕМ КНОПКИ С ЭМОДЗИ
+        default_buttons = [
+            ('main', 'profile', 'Профиль', 'menu:profile', None, 'primary', '6032693626394382504', 1, 1),
+            ('main', 'shop', 'Магазин', 'menu:shop', None, 'primary', '5348475279960456198', 1, 2),
+            ('main', 'info', 'Информация', 'menu:info', None, 'success', '5348507247402040764', 2, 1),
+            ('main', 'channel', 'Канал', None, 'https://t.me/anthropc_claude', 'success', '5260268501515377807', 2, 2),
+            ('main', 'support', 'Поддержка', None, 'https://t.me/cxepy', 'danger', '5258513401784573443', 3, 1),
+            ('profile', 'deposit', 'Пополнить баланс', 'profile:deposit', None, 'success', '5429098361636560179', 1, 1),
+            ('profile', 'purchases', 'Покупки', 'profile:purchases', None, 'primary', '5429412504134525920', 2, 1),
+            ('profile', 'promo', 'Промокод', 'profile:promo', None, 'primary', '5427375590124598857', 2, 2),
+            ('profile', 'ref', 'Рефералка', 'profile:referral', None, 'primary', '5429256253224299845', 3, 1),
+            ('profile', 'back', 'Назад', 'menu:back', None, 'danger', '5888484185261216745', 3, 2),
+            ('shop', 'api', 'API-ключи', 'shop:catalog', None, 'success', '5427112068111184025', 1, 1),
+            ('shop', 'back', 'Назад', 'menu:back', None, 'danger', '5888484185261216745', 2, 1)
+        ]
+        for b in default_buttons:
+            await conn.execute("""
+                INSERT INTO buttons (screen, button_key, text, callback_data, url, style, emoji_id, row_num, position) 
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                ON CONFLICT (button_key) DO UPDATE SET 
+                text = EXCLUDED.text, callback_data = EXCLUDED.callback_data, url = EXCLUDED.url, 
+                style = EXCLUDED.style, emoji_id = EXCLUDED.emoji_id, row_num = EXCLUDED.row_num, position = EXCLUDED.position
+            """, *b)
 
 async def get_setting(key: str, default: str = "") -> str:
     pool = await get_pool()
@@ -191,7 +164,6 @@ async def buy_product(user_id: int, product_id: int, discount: int = 0) -> Dict[
     pool = await get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            # Блокируем строку пользователя, чтобы избежать списания дважды
             user = await conn.fetchrow("SELECT balance FROM users WHERE user_id = $1 FOR UPDATE", user_id)
             if not user: return {"success": False, "error": "Юзер не найден"}
             
@@ -201,7 +173,6 @@ async def buy_product(user_id: int, product_id: int, discount: int = 0) -> Dict[
             final_price = int(prod['price'] * (1 - discount / 100))
             if user['balance'] < final_price: return {"success": False, "error": "Недостаточно средств"}
             
-            # Блокируем ключ, чтобы два человека не купили один и тот же
             item = await conn.fetchrow("SELECT id, content FROM product_items WHERE product_id = $1 AND is_sold = 0 LIMIT 1 FOR UPDATE", product_id)
             if not item: return {"success": False, "error": "Нет в наличии"}
             
@@ -235,6 +206,5 @@ async def update_button(button_key: str, **kwargs):
     pool = await get_pool()
     async with pool.acquire() as conn:
         for key, value in kwargs.items():
-            # Защита от SQL-инъекций через ключи (только разрешенные колонки)
             if key in ['text', 'callback_data', 'url', 'style', 'emoji_id', 'row_num', 'position', 'is_active']:
                 await conn.execute(f"UPDATE buttons SET {key} = $1 WHERE button_key = $2", value, button_key)
