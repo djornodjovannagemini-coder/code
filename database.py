@@ -8,7 +8,6 @@ logger = logging.getLogger(__name__)
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise ValueError("❌ КРИТИЧЕСКАЯ ОШИБКА: DATABASE_URL не задан в Variables!")
-
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
@@ -18,13 +17,7 @@ _pool: Optional[asyncpg.Pool] = None
 async def get_pool() -> asyncpg.Pool:
     global _pool
     if _pool is None:
-        _pool = await asyncpg.create_pool(
-            DATABASE_URL,
-            min_size=1,
-            max_size=10,
-            ssl="require" if use_ssl else None,
-            timeout=10
-        )
+        _pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=10, ssl="require" if use_ssl else None, timeout=10)
     return _pool
 
 async def init_db():
@@ -55,7 +48,9 @@ async def init_db():
             );
         """)
         
-        # 1. ВОЗВРАЩАЕМ ТЕКСТЫ С ПРЕМИУМ-ЭМОДЗИ (Принудительное обновление)
+        # ИСПРАВЛЕНО: Удаляем дублирующуюся кнопку "Назад" из базы (теперь она генерируется автоматически)
+        await conn.execute("DELETE FROM buttons WHERE button_key = 'back'")
+        
         default_settings = [
             ("start_text", "Claude AI Store\n<tg-emoji emoji-id=\"5193119436621494267\">🏠</tg-emoji> Главное меню\n<b>━━━━━━━━━━━━━</b>\n\n<tg-emoji emoji-id=\"5458904472598095631\">👋</tg-emoji> С возвращением, <b>{name}</b>.\n<tg-emoji emoji-id=\"5769126056262898415\">💰</tg-emoji> Баланс: <b>{balance} ₽</b>\n\nРазные продукты · API-ключи · Приватные сообщества"),
             ("start_photo", ""),
@@ -68,7 +63,7 @@ async def init_db():
         for k, v in default_settings:
             await conn.execute("INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", k, v)
         
-        # 2. ВОЗВРАЩАЕМ КНОПКИ С ЭМОДЗИ
+        # ИСПРАВЛЕНО: Из дефолтных кнопок убран 'back'
         default_buttons = [
             ('main', 'profile', 'Профиль', 'menu:profile', None, 'primary', '6032693626394382504', 1, 1),
             ('main', 'shop', 'Магазин', 'menu:shop', None, 'primary', '5348475279960456198', 1, 2),
@@ -79,9 +74,7 @@ async def init_db():
             ('profile', 'purchases', 'Покупки', 'profile:purchases', None, 'primary', '5429412504134525920', 2, 1),
             ('profile', 'promo', 'Промокод', 'profile:promo', None, 'primary', '5427375590124598857', 2, 2),
             ('profile', 'ref', 'Рефералка', 'profile:referral', None, 'primary', '5429256253224299845', 3, 1),
-            ('profile', 'back', 'Назад', 'menu:back', None, 'danger', '5888484185261216745', 3, 2),
-            ('shop', 'api', 'API-ключи', 'shop:catalog', None, 'success', '5427112068111184025', 1, 1),
-            ('shop', 'back', 'Назад', 'menu:back', None, 'danger', '5888484185261216745', 2, 1)
+            ('shop', 'api', 'API-ключи', 'shop:catalog', None, 'success', '5427112068111184025', 1, 1)
         ]
         for b in default_buttons:
             await conn.execute("""
