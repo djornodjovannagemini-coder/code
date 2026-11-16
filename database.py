@@ -178,6 +178,13 @@ async def init_db():
                 paid_at TIMESTAMP, expires_at TIMESTAMP
             );
             ALTER TABLE deposits ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP;
+            ALTER TABLE deposits ADD COLUMN IF NOT EXISTS cashera_uuid TEXT;
+            ALTER TABLE deposits ADD COLUMN IF NOT EXISTS cashera_method TEXT;
+            CREATE TABLE IF NOT EXISTS webhook_events (
+                id SERIAL PRIMARY KEY, provider TEXT, event_uuid TEXT, event_status TEXT,
+                payload TEXT, created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (provider, event_uuid, event_status)
+            );
             CREATE INDEX IF NOT EXISTS deposits_status_idx ON deposits (status);
             CREATE INDEX IF NOT EXISTS product_items_sold_idx ON product_items (product_id, is_sold);
         """)
@@ -202,6 +209,9 @@ async def init_db():
             ("choose_text", "Claude AI Store\n<tg-emoji emoji-id=\"5429098361636560179\">💰</tg-emoji> Пополнение баланса\n<b>━━━━━━━━━━━━━</b>\n\nСумма: <b>{amount}₽</b>\nID Заказа: <b>{order_id}</b>\n\nВыберите способ оплаты. Баланс зачислится автоматически."),
             ("crypto_text", "Claude AI Store\n<tg-emoji emoji-id=\"5426938074691056759\">💳</tg-emoji> Оплата криптой\n<b>━━━━━━━━━━━━━</b>\n\nПополнение: <b>{amount}₽</b>\nКомиссия CryptoBot {fee}%: +{fee_amount}₽\nК оплате: <b>{total}₽</b> (~${usd})\n\n<tg-emoji emoji-id=\"5426976819591032000\">⏳</tg-emoji> Ссылка действительна {minutes} минут.\n\n1. Нажмите «Оплатить» и переведите в USDT.\n2. Затем нажмите «Проверить оплату»."),
             ("crypto_expired_text", "Claude AI Store\n<tg-emoji emoji-id=\"5426938074691056759\">💳</tg-emoji> Оплата криптой\n<b>━━━━━━━━━━━━━</b>\n\nСрок действия счёта истёк.\nСоздайте новый счёт, чтобы оплатить."),
+            ("cashera_text", "Claude AI Store\n<tg-emoji emoji-id=\"5217961106554769883\">🟢</tg-emoji> Оплата\n<b>━━━━━━━━━━━━━</b>\n\nСумма: <b>{amount}₽</b>\nID Заказа: <b>{order_id}</b>\n\nНажмите «Оплатить», выберите способ на защищённой странице и вернитесь.\n\n<tg-emoji emoji-id=\"5426976819591032000\">⏳</tg-emoji> Ссылка действительна {minutes} минут."),
+            ("cashera_expired_text", "Claude AI Store\n<tg-emoji emoji-id=\"5217961106554769883\">🟢</tg-emoji> Оплата\n<b>━━━━━━━━━━━━━</b>\n\nСрок действия ссылки истёк.\nСоздайте новую, чтобы оплатить."),
+            ("cashera_ttl_minutes", "20"),
             ("support_url", "https://t.me/cxepy"),
             ("require_agreement", "1"),
             ("agreement_text", AGREEMENT_TEXT),
@@ -253,12 +263,18 @@ async def init_db():
             ('to_profile', 'to_profile:back', 'Назад', 'menu:profile', None, 'danger', '5888484185261216745', 1, 1),
             ('cancel', 'cancel:back', 'Отмена', 'profile:deposit', None, 'danger', '5888484185261216745', 1, 1),
             ('choose_payment', 'choose:crypto', 'CryptoBot', 'dep:pay:{id}', None, 'primary', '5361836987642815474', 1, 1),
-            ('choose_payment', 'choose:admin', 'Через админа', None, '{support}', 'primary', '5426948678965307932', 1, 2),
+            ('choose_payment', 'choose:sbp', 'СБП', 'dep:cashera:{id}:sbp', None, 'success', '5217961106554769883', 1, 2),
+            ('choose_payment', 'choose:admin', 'Через админа', None, '{support}', 'primary', '5426948678965307932', 1, 3),
             ('crypto_pay', 'crypto_pay:pay', 'Оплатить', None, '{url}', 'success', '5429098361636560179', 1, 1),
             ('crypto_pay', 'crypto_pay:check', 'Проверить оплату', 'dep:check:{id}', None, 'primary', '5427398138702899667', 2, 1),
             ('crypto_pay', 'crypto_pay:back', 'Назад', 'dep:back:{id}', None, 'danger', '5888484185261216745', 3, 1),
             ('crypto_expired', 'crypto_expired:new', 'Создать новый счёт', 'dep:pay:{id}', None, 'success', '5429098361636560179', 1, 1),
             ('crypto_expired', 'crypto_expired:back', 'Назад', 'dep:back:{id}', None, 'danger', '5888484185261216745', 2, 1),
+            ('cashera_expired', 'cashera_expired:new', 'Создать новую ссылку', 'dep:cashera:{id}:sbp', None, 'success', '5429098361636560179', 1, 1),
+            ('cashera_expired', 'cashera_expired:back', 'Назад', 'dep:back:{id}', None, 'danger', '5888484185261216745', 2, 1),
+            ('cashera_pay', 'cashera_pay:pay', 'Оплатить', None, '{url}', 'success', '5429098361636560179', 1, 1),
+            ('cashera_pay', 'cashera_pay:check', 'Проверить оплату', 'dep:cashera_check:{id}', None, 'primary', '5427398138702899667', 2, 1),
+            ('cashera_pay', 'cashera_pay:back', 'Назад', 'dep:back:{id}', None, 'danger', '5888484185261216745', 3, 1),
             ('announce', 'announce:go', 'Перейти к товару', 'shop:item:{id}', None, 'success', '5429412504134525920', 1, 1),
             ('adm_main', 'adm_main:prod', '📦 Товары', 'adm:prod', None, 'primary', None, 1, 1),
             ('adm_main', 'adm_main:users', '👥 Юзеры', 'adm:users', None, 'primary', None, 1, 2),
@@ -292,6 +308,8 @@ async def init_db():
             ('adm_design', 'adm_design:purchases', '🛒 Покупки', 'adm:design:purchases', None, 'primary', None, 3, 1),
             ('adm_design', 'adm_design:promo', '🎟 Промокод', 'adm:design:promo', None, 'primary', None, 3, 2),
             ('adm_design', 'adm_design:ref', '🔗 Рефералка', 'adm:design:ref', None, 'primary', None, 3, 3),
+            ('adm_design', 'adm_design:cashera', '🟢 Оплата Cashera', 'adm:design:cashera_pay', None, 'primary', None, 5, 1),
+            ('adm_design', 'adm_design:cashera_exp', '⏳ Ссылка истекла', 'adm:design:cashera_expired', None, 'primary', None, 5, 2),
             ('adm_design', 'adm_design:back', 'Назад', 'adm:menu', None, 'danger', '5888484185261216745', 9, 1),
             ('adm_settings', 'adm_settings:tech', 'Тех. работы', 'adm:settings:tech', None, 'success', None, 1, 1),
             ('adm_settings', 'adm_settings:amounts', 'Изменить суммы пополнения', 'adm:settings:amounts', None, 'primary', None, 2, 1),
@@ -547,6 +565,35 @@ async def set_deposit_invoice(deposit_id: int, invoice_id: str, expires_at=None,
             "method = COALESCE($3, method) WHERE id = $4",
             invoice_id, expires_at, method, deposit_id,
         )
+
+
+async def set_deposit_cashera(deposit_id: int, cashera_uuid: str, method: str = None, expires_at=None):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE deposits SET cashera_uuid = $1, cashera_method = COALESCE($2, cashera_method), "
+            "expires_at = COALESCE($3, expires_at) WHERE id = $4",
+            cashera_uuid, method, expires_at, deposit_id,
+        )
+
+
+async def get_deposit_by_cashera_uuid(cashera_uuid: str) -> Optional[Dict[str, Any]]:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM deposits WHERE cashera_uuid = $1", cashera_uuid)
+        return dict(row) if row else None
+
+
+async def mark_event_once(provider: str, event_uuid: str, event_status: str, payload: str) -> bool:
+    """True — событие новое и его нужно обработать; False — уже было."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "INSERT INTO webhook_events (provider, event_uuid, event_status, payload) "
+            "VALUES ($1, $2, $3, $4) ON CONFLICT (provider, event_uuid, event_status) DO NOTHING RETURNING id",
+            provider, event_uuid, event_status, payload,
+        )
+        return row is not None
 
 
 async def get_deposit(deposit_id: int) -> Optional[Dict[str, Any]]:

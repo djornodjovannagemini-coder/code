@@ -24,6 +24,8 @@ import admin
 import addin
 import database as db
 import payments
+import payments_cashera as cashera
+import webhook
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +34,7 @@ ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().
 
 BOT_USERNAME = ""
 POLL_INTERVAL = 5
+CASHERA_POLL = 10
 
 router = Router()
 
@@ -134,6 +137,14 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
         return await show_agreement(message)
     await show_start(message)
 
+
+def _parse_dt(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(timezone.utc).replace(tzinfo=None)
+    except ValueError:
+        return None
 
 async def _agreement_required() -> bool:
     return await db.get_setting("require_agreement", "1") == "1"
@@ -553,6 +564,103 @@ async def check_deposit(call: CallbackQuery, bot: Bot):
     await deny(call, "Оплата не найдена. Если вы только что заплатили — подождите минуту.")
 
 
+@router.callback_query(F.data.startswith("dep:cashera:"))
+async def pay_cashera(call: CallbackQuery, bot: Bot):
+    parts = call.data.split(":")
+    dep_id = int(parts[2])
+    method = parts[3] if len(parts) > 3 else "sbp"
+    dep = await db.get_deposit(dep_id)
+    if not dep or dep['user_id'] != call.from_user.id:
+        return await deny(call, "Заказ не найден")
+    if dep['status'] == 'paid':
+        return await deny(call, "Заказ уже оплачен")
+    if not cashera.enabled():
+        return await deny(call, "Оплата временно недоступна")
+    await call.answer()
+
+    try:
+        payment = await cashera.create_payment(
+            dep['amount'], f"dep-{dep_id}", f"Пополнение баланса #{dep_id}", method=method,
+        )
+    except cashera.CasheraError as e:
+        logger.error("Cashera: платёж для заявки %s не создан: %s %s", dep_id, e.status, e.message)
+        await notify_admins(bot, f"Cashera: ошибка создания платежа #{dep_id}: {e.status} {html.escape(e.message)}")
+        support = await db.get_setting("support_url", "https://t.me/cxepy")
+        return await show(
+            call, "Платёжная система вернула ошибку. Попробуйте другой способ или напишите в поддержку.",
+            await addin.kb("choose_payment", {"id": dep_id, "support": support}),
+        )
+
+    if not payment.get("payment_url") or not payment.get("uuid"):
+        logger.error("Cashera: пустой ответ на создание платежа: %s", payment)
+        return await deny(call, "Не удалось получить ссылку на оплату, попробуйте позже")
+
+    minutes = int(await db.get_setting("cashera_ttl_minutes", "20") or 20)
+    expires_at = _parse_dt(payment.get("expires_at")) or (
+        datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=minutes)
+    )
+    await db.set_deposit_cashera(dep_id, payment['uuid'], method, expires_at)
+
+    text = await fill("cashera_text", amount=money(dep['amount']), order_id=dep_id, minutes=minutes)
+    await show(call, text, await addin.kb("cashera_pay", {"id": dep_id, "url": payment['payment_url']}))
+    asyncio.create_task(watch_cashera(bot, dep_id, payment['uuid'], minutes))
+
+
+async def watch_cashera(bot: Bot, dep_id: int, cashera_uuid: str, minutes: int):
+    for _ in range(max(1, minutes * 60 // CASHERA_POLL)):
+        await asyncio.sleep(CASHERA_POLL)
+        try:
+            payment = await cashera.get_payment(uuid=cashera_uuid)
+        except cashera.CasheraError:
+            logger.warning("Cashera: не удалось проверить платёж %s", cashera_uuid, exc_info=True)
+            continue
+        if not payment:
+            return
+        if payment['status'] == 'paid':
+            await credit_deposit(bot, dep_id)
+            return
+        if payment['status'] in ("canceled", "failed", "expired"):
+            dep = await db.get_deposit(dep_id)
+            if dep and dep['status'] == 'pending':
+                await db.cancel_deposit(dep_id)
+            return
+
+
+@router.callback_query(F.data.startswith("dep:cashera_check:"))
+async def cashera_check(call: CallbackQuery, bot: Bot):
+    dep_id = int(call.data.split(":")[2])
+    dep = await db.get_deposit(dep_id)
+    if not dep or dep['user_id'] != call.from_user.id:
+        return await deny(call, "Счёт не найден")
+    if dep['status'] == 'paid':
+        return await deny(call, "Этот счёт уже зачислен")
+    if not dep.get('cashera_uuid'):
+        return await deny(call, "Счёт не найден")
+
+    try:
+        payment = await cashera.get_payment(uuid=dep['cashera_uuid'])
+    except cashera.CasheraError as e:
+        logger.warning("Cashera: проверка счёта %s не удалась: %s", dep['cashera_uuid'], e.message)
+        return await deny(call, "Платёжная система недоступна, попробуйте через минуту")
+    if not payment:
+        return await deny(call, "Счёт не найден в платёжной системе")
+
+    if payment['status'] == 'paid':
+        await call.answer("Оплачено")
+        await credit_deposit(bot, dep_id)
+        user = await db.get_user(call.from_user.id)
+        text = (f"{emo(addin.BALANCE_EMOJI, '💰')} Баланс пополнен на <b>{money(dep['amount'])} ₽</b>\n"
+                f"Текущий баланс: <b>{money(user['balance'] if user else dep['amount'])} ₽</b>")
+        return await show(call, text, await addin.simple_kb("to_profile"))
+
+    if payment['status'] in ("canceled", "failed", "expired"):
+        await call.answer()
+        return await show(call, await db.get_setting("cashera_expired_text"),
+                          await addin.kb("cashera_expired", {"id": dep_id}))
+
+    await deny(call, "Оплата не найдена. Если вы только что заплатили — подождите минуту.")
+
+
 @router.callback_query(F.data == "profile:promo")
 async def show_promo(call: CallbackQuery, state: FSMContext):
     await call.answer()
@@ -633,9 +741,15 @@ async def main():
     dp.include_router(router)
 
     await bot.delete_webhook(drop_pending_updates=True)
+    runner = None
     try:
+        if cashera.enabled():
+            runner = await webhook.start_server(lambda dep_id: credit_deposit(bot, dep_id))
+        else:
+            logger.warning("CASHERA_API_KEY не задан — приём через Cashera выключен")
         await dp.start_polling(bot)
     finally:
+        await webhook.stop_server(runner)
         await payments.close()
         await db.close_pool()
         await bot.session.close()

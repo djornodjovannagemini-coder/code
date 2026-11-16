@@ -34,7 +34,8 @@ SCREENS = {"start": "Старт", "profile": "Профиль", "shop": "Мага
            "deposit": "Пополнение", "info": "Информация",
            "purchases": "Покупки", "promo": "Промокод", "ref": "Рефералка",
            "terms": "Пользовательское соглашение", "privacy": "Политика конфиденциальности",
-           "agreement": "Экран согласия"}
+           "agreement": "Экран согласия", "cashera_pay": "Оплата Cashera",
+           "cashera_expired": "Ссылка Cashera истекла"}
 
 
 def is_adm(uid):
@@ -877,6 +878,8 @@ BUTTON_SCREENS = [
     ("terms", "Пользовательское соглашение"),
     ("privacy", "Политика конфиденциальности"),
     ("choose_payment", "Выбор способа оплаты"),
+    ("cashera_pay", "Оплата через Cashera"),
+    ("cashera_expired", "Ссылка Cashera истекла"),
     ("crypto_pay", "Оплата криптой"),
     ("crypto_expired", "Счёт истёк"),
     ("announce", "Анонс пополнения товара"),
