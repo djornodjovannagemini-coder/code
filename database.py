@@ -20,6 +20,7 @@ TERMS_TEXT = (
     'Claude AI Store\n'
     '<tg-emoji emoji-id="5348507247402040764">📄</tg-emoji> Пользовательское соглашение\n'
     '<b>━━━━━━━━━━━━━</b>\n\n'
+'<i>Дата публикации: 17 ноября 2026 г.</i>\n\n'
     '<b>1. Общие положения</b>\n'
     'Настоящее Соглашение — публичная оферта. Начиная пользоваться ботом (запуск, пополнение баланса, покупка), '
     'вы полностью принимаете его условия. Если вы не согласны — прекратите использование бота.\n\n'
@@ -65,6 +66,7 @@ PRIVACY_TEXT = (
     'Claude AI Store\n'
     '<tg-emoji emoji-id="5348507247402040764">🔒</tg-emoji> Политика конфиденциальности\n'
     '<b>━━━━━━━━━━━━━</b>\n\n'
+'<i>Дата публикации: 17 ноября 2026 г.</i>\n\n'
     '<b>1. Оператор</b>\n'
     'Оператор — администрация бота Claude AI Store (контакт: @cxepy). Политика описывает, какие данные '
     'обрабатываются при использовании бота, и составлена с учётом ФЗ-152 «О персональных данных».\n\n'
@@ -104,6 +106,22 @@ PRIVACY_TEXT = (
     '<b>11. Контакты</b>\n'
     'Поддержка: @cxepy'
 )
+
+DOC_PUBLISH_DATE = "17 ноября 2026 г."
+
+
+def with_publish_date(text: str) -> str:
+    """Добавляет строку с датой публикации после заголовка, не трогая остальной текст."""
+    if not text or "Дата публикации" in text:
+        return text
+    lines = text.split("\n")
+    idx = next((i for i, line in enumerate(lines) if "━━━" in line), None)
+    if idx is None:
+        idx = 1 if len(lines) > 1 else 0
+    lines.insert(idx + 1, "")
+    lines.insert(idx + 2, f"<i>Дата публикации: {DOC_PUBLISH_DATE}</i>")
+    return "\n".join(lines)
+
 
 AGREEMENT_TEXT = (
     'Claude AI Store\n'
@@ -236,6 +254,13 @@ async def init_db():
         # DO NOTHING вместо DO UPDATE — правки из админки не затираются при рестарте
         for k, v in default_settings:
             await conn.execute("INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING", k, v)
+
+        # Дата публикации в документах: дописываем, если её ещё нет (правки из админки сохраняются)
+        for doc_key in ("terms_text", "privacy_text"):
+            current = await conn.fetchrow("SELECT value FROM settings WHERE key = $1", doc_key)
+            if current and current['value'] and "Дата публикации" not in current['value']:
+                await conn.execute("UPDATE settings SET value = $1 WHERE key = $2",
+                                   with_publish_date(current['value']), doc_key)
 
         # Ключи кнопок всегда вида screen:key; старые записи переименовываются один раз
         await conn.execute("UPDATE buttons SET button_key = screen || ':' || button_key WHERE button_key NOT LIKE '%:%'")
